@@ -344,8 +344,11 @@ export default function Dashboard() {
       // Exclure les leads terminés (convertis ou mauvais)
       if (['CONVERTED', 'JUNK'].includes(l.STATUS_ID)) return false;
       
+      // Utiliser LAST_ACTIVITY_TIME (vrai dernier contact) si disponible, sinon DATE_MODIFY
+      const lastContact = l.LAST_ACTIVITY_TIME || l.DATE_MODIFY;
+      
       // Vérifier si le lead est en retard
-      const isStale = daysAgo(l.DATE_MODIFY) > delaiRetard;
+      const isStale = daysAgo(lastContact) > delaiRetard;
       if (!isStale) return false;
       
       // Exclure si le lead a une relance planifiée (si option activée)
@@ -374,10 +377,11 @@ export default function Dashboard() {
       byCommercial[id].count++;
       
       const hasReminder = leadsWithPendingReminder.has(l.ID);
+      const lastContact = l.LAST_ACTIVITY_TIME || l.DATE_MODIFY;
       
       byCommercial[id].leads.push({
         id: l.ID, title: l.TITLE || l.NAME || 'Sans nom', status: LEAD_STATUS_MAP[l.STATUS_ID] || l.STATUS_ID,
-        dateCreate: l.DATE_CREATE, dateModify: l.DATE_MODIFY, daysAgo: daysAgo(l.DATE_MODIFY),
+        dateCreate: l.DATE_CREATE, dateModify: l.DATE_MODIFY, lastContact: lastContact, daysAgo: daysAgo(lastContact),
         phone: l.PHONE && l.PHONE[0] ? l.PHONE[0].VALUE : '', source: getSourceName(l.SOURCE_ID),
         hasReminder
       });
@@ -389,12 +393,16 @@ export default function Dashboard() {
       byEtape[s] = (byEtape[s] || 0) + 1;
     });
     
-    const critical = staleLeads.filter(l => daysAgo(l.DATE_MODIFY) > delaiCritique).length;
+    const critical = staleLeads.filter(l => {
+      const lastContact = l.LAST_ACTIVITY_TIME || l.DATE_MODIFY;
+      return daysAgo(lastContact) > delaiCritique;
+    }).length;
     
     // Compter les leads exclus car ils ont une relance
     const excludedByReminder = rawLeads.filter(l => {
       if (['CONVERTED', 'JUNK'].includes(l.STATUS_ID)) return false;
-      if (daysAgo(l.DATE_MODIFY) <= delaiRetard) return false;
+      const lastContact = l.LAST_ACTIVITY_TIME || l.DATE_MODIFY;
+      if (daysAgo(lastContact) <= delaiRetard) return false;
       return leadsWithPendingReminder.has(l.ID);
     }).length;
     
@@ -411,8 +419,11 @@ export default function Dashboard() {
       // Exclure les deals terminés (Won, Lose, Avance expirée)
       if (d.STAGE_ID && (d.STAGE_ID.includes('WON') || d.STAGE_ID.includes('LOSE') || d.STAGE_ID.includes('APOLOGY'))) return false;
       
+      // Utiliser LAST_ACTIVITY_TIME (vrai dernier contact) si disponible, sinon DATE_MODIFY
+      const lastContact = d.LAST_ACTIVITY_TIME || d.DATE_MODIFY;
+      
       // Vérifier si le deal est en retard
-      const isStale = daysAgo(d.DATE_MODIFY) > delaiRetard;
+      const isStale = daysAgo(lastContact) > delaiRetard;
       if (!isStale) return false;
       
       // Exclure si le deal a une relance planifiée (si option activée)
@@ -441,10 +452,11 @@ export default function Dashboard() {
       byCommercial[id].count++;
       
       const hasReminder = dealsWithPendingReminder.has(d.ID);
+      const lastContact = d.LAST_ACTIVITY_TIME || d.DATE_MODIFY;
       
       byCommercial[id].deals.push({
         id: d.ID, title: d.TITLE || 'Sans nom', stage: DEAL_STAGE_MAP[d.STAGE_ID] || d.STAGE_ID,
-        dateCreate: d.DATE_CREATE, dateModify: d.DATE_MODIFY, daysAgo: daysAgo(d.DATE_MODIFY),
+        dateCreate: d.DATE_CREATE, dateModify: d.DATE_MODIFY, lastContact: lastContact, daysAgo: daysAgo(lastContact),
         opportunity: d.OPPORTUNITY, hasReminder
       });
     });
@@ -455,13 +467,17 @@ export default function Dashboard() {
       byEtape[s] = (byEtape[s] || 0) + 1;
     });
     
-    const critical = staleDeals.filter(d => daysAgo(d.DATE_MODIFY) > delaiCritique).length;
+    const critical = staleDeals.filter(d => {
+      const lastContact = d.LAST_ACTIVITY_TIME || d.DATE_MODIFY;
+      return daysAgo(lastContact) > delaiCritique;
+    }).length;
     
     // Compter les deals exclus car ils ont une relance
     const excludedByReminder = rawDeals.filter(d => {
       if (d.STAGE_ID && (d.STAGE_ID.startsWith('C1:') || d.STAGE_ID.startsWith('C5:'))) return false;
       if (d.STAGE_ID && (d.STAGE_ID.includes('WON') || d.STAGE_ID.includes('LOSE') || d.STAGE_ID.includes('APOLOGY'))) return false;
-      if (daysAgo(d.DATE_MODIFY) <= delaiRetard) return false;
+      const lastContact = d.LAST_ACTIVITY_TIME || d.DATE_MODIFY;
+      if (daysAgo(lastContact) <= delaiRetard) return false;
       return dealsWithPendingReminder.has(d.ID);
     }).length;
     
@@ -635,6 +651,40 @@ export default function Dashboard() {
       });
     });
     
+    // === NOUVEAU: Deals sans aucune activité (jamais contactés) ===
+    const dealsWithoutActivity = filteredDeals.filter(d => 
+      !d.LAST_ACTIVITY_TIME && 
+      d.STAGE_ID && 
+      !d.STAGE_ID.includes('WON') && 
+      !d.STAGE_ID.includes('LOSE') && 
+      !d.STAGE_ID.includes('APOLOGY')
+    ).map(d => ({
+      id: d.ID,
+      title: d.TITLE || 'Sans nom',
+      stage: DEAL_STAGE_MAP[d.STAGE_ID] || d.STAGE_ID,
+      stageId: d.STAGE_ID,
+      opportunity: d.OPPORTUNITY,
+      dateCreate: d.DATE_CREATE,
+      daysOld: d.DATE_CREATE ? Math.floor((new Date() - new Date(d.DATE_CREATE)) / (1000 * 60 * 60 * 24)) : 0,
+      commercial: getUserName(d.ASSIGNED_BY_ID)
+    })).sort((a, b) => b.daysOld - a.daysOld);
+    
+    // === NOUVEAU: Leads sans aucune activité (jamais contactés) ===
+    const leadsWithoutActivity = filteredLeads.filter(l => 
+      !l.LAST_ACTIVITY_TIME && 
+      l.STATUS_ID && 
+      l.STATUS_ID !== 'CONVERTED' && 
+      l.STATUS_ID !== 'JUNK'
+    ).map(l => ({
+      id: l.ID,
+      title: l.NAME || l.TITLE || 'Sans nom',
+      status: LEAD_STATUS_MAP[l.STATUS_ID] || l.STATUS_ID,
+      statusId: l.STATUS_ID,
+      dateCreate: l.DATE_CREATE,
+      daysOld: l.DATE_CREATE ? Math.floor((new Date() - new Date(l.DATE_CREATE)) / (1000 * 60 * 60 * 24)) : 0,
+      commercial: getUserName(l.ASSIGNED_BY_ID)
+    })).sort((a, b) => b.daysOld - a.daysOld);
+    
     // Clients fidèles (leads avec plusieurs deals Won)
     const leadDealsCount = {};
     filteredDeals.forEach(d => {
@@ -677,9 +727,11 @@ export default function Dashboard() {
           commercial: getUserName(d.ASSIGNED_BY_ID)
         })).sort((a, b) => new Date(b.dateCreate) - new Date(a.dateCreate))
       },
+      dealsWithoutActivity,
+      leadsWithoutActivity,
       loyalClients
     };
-  }, [filteredDeals, rawLeads, getUserName]);
+  }, [filteredDeals, filteredLeads, rawLeads, getUserName]);
 
   // ====== STATS DU JOUR (AUJOURD'HUI) ======
   const dailyStats = useMemo(() => {
@@ -975,7 +1027,7 @@ DOCTOUR Analytics`);
     { id: 'mensuel', label: 'Mensuel', icon: '📆' },
     { id: 'delais', label: 'Delais', icon: '⏱️' },
     { id: 'alerts', label: 'Alertes', icon: '🚨', badge: alertsLeads.total + alertsDeals.total },
-    { id: 'qualite', label: 'Qualité', icon: '🔍', badge: qualityStats.dealsWithoutLead.won + qualityStats.dealsWithoutLead.inProgress }
+    { id: 'qualite', label: 'Qualité', icon: '🔍', badge: qualityStats.dealsWithoutLead.won + qualityStats.dealsWithoutLead.inProgress + qualityStats.dealsWithoutActivity.length + qualityStats.leadsWithoutActivity.length }
   ];
 
   if (loading) {
@@ -1306,12 +1358,12 @@ DOCTOUR Analytics`);
           {selectedAlertCommercial && alertsLeads.byCommercial[selectedAlertCommercial] && (
             <div>
               <div className="flex justify-between items-center mb-4">
-                <p className="text-slate-400">{alertsLeads.byCommercial[selectedAlertCommercial].count} leads en retard (&gt; {delaiRetard}j)</p>
+                <p className="text-slate-400">{alertsLeads.byCommercial[selectedAlertCommercial].count} leads sans contact depuis &gt; {delaiRetard}j</p>
                 <Button onClick={() => exportRetards(selectedAlertCommercial, 'leads')} variant="success" size="sm">📥 Exporter</Button>
               </div>
               <div className="overflow-x-auto max-h-96">
                 <table className="w-full text-sm">
-                  <thead><tr className="border-b border-slate-700 text-slate-400"><th className="p-2 text-left">Nom</th><th className="p-2 text-left">Etape</th><th className="p-2 text-right">Jours</th></tr></thead>
+                  <thead><tr className="border-b border-slate-700 text-slate-400"><th className="p-2 text-left">Nom</th><th className="p-2 text-left">Etape</th><th className="p-2 text-right">Dernier contact</th></tr></thead>
                   <tbody>
                     {alertsLeads.byCommercial[selectedAlertCommercial].leads.sort((a, b) => b.daysAgo - a.daysAgo).slice(0, 50).map(l => (
                       <tr key={l.id} className={'border-b border-slate-800 ' + (l.daysAgo > delaiCritique ? 'bg-red-500/10' : '')}>
@@ -1332,12 +1384,12 @@ DOCTOUR Analytics`);
           {selectedAlertCommercial && alertsDeals.byCommercial[selectedAlertCommercial] && (
             <div>
               <div className="flex justify-between items-center mb-4">
-                <p className="text-slate-400">{alertsDeals.byCommercial[selectedAlertCommercial].count} deals en retard (&gt; {delaiRetard}j)</p>
+                <p className="text-slate-400">{alertsDeals.byCommercial[selectedAlertCommercial].count} deals sans contact depuis &gt; {delaiRetard}j</p>
                 <Button onClick={() => exportRetards(selectedAlertCommercial, 'deals')} variant="success" size="sm">📥 Exporter</Button>
               </div>
               <div className="overflow-x-auto max-h-96">
                 <table className="w-full text-sm">
-                  <thead><tr className="border-b border-slate-700 text-slate-400"><th className="p-2 text-left">Nom</th><th className="p-2 text-left">Etape</th><th className="p-2 text-right">Montant</th><th className="p-2 text-right">Jours</th></tr></thead>
+                  <thead><tr className="border-b border-slate-700 text-slate-400"><th className="p-2 text-left">Nom</th><th className="p-2 text-left">Etape</th><th className="p-2 text-right">Montant</th><th className="p-2 text-right">Dernier contact</th></tr></thead>
                   <tbody>
                     {alertsDeals.byCommercial[selectedAlertCommercial].deals.sort((a, b) => b.daysAgo - a.daysAgo).slice(0, 50).map(d => (
                       <tr key={d.id} className={'border-b border-slate-800 ' + (d.daysAgo > delaiCritique ? 'bg-red-500/10' : '')}>
@@ -1482,10 +1534,12 @@ DOCTOUR Analytics`);
         {activeTab === 'qualite' && (
           <div className="space-y-4">
             {/* KPIs Qualité */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
               <KpiCard icon="⚠️" label="Deals sans lead" value={qualityStats.dealsWithoutLead.total} subtext="Total orphelins" color="orange" />
               <KpiCard icon="🚨" label="Won sans lead" value={qualityStats.dealsWithoutLead.won} subtext="Critique - pas de traçabilité" color="red" />
               <KpiCard icon="⏳" label="En cours sans lead" value={qualityStats.dealsWithoutLead.inProgress} subtext="À surveiller" color="yellow" />
+              <KpiCard icon="📵" label="Deals jamais contactés" value={qualityStats.dealsWithoutActivity.length} subtext="Aucune activité" color="red" />
+              <KpiCard icon="☎️" label="Leads jamais contactés" value={qualityStats.leadsWithoutActivity.length} subtext="Aucune activité" color="pink" />
               <KpiCard icon="👑" label="Clients fidèles" value={qualityStats.loyalClients.length} subtext="Multi-Won" color="purple" />
             </div>
 
@@ -1549,6 +1603,70 @@ DOCTOUR Analytics`);
                           <td className="p-2"><Badge color="yellow" size="xs">{d.stage}</Badge></td>
                           <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(d.opportunity)}</td>
                           <td className="p-2">{d.commercial}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            )}
+
+            {/* NOUVEAU: Deals jamais contactés */}
+            {qualityStats.dealsWithoutActivity.length > 0 && (
+              <Card title="📵 Deals jamais contactés" icon="🚨">
+                <p className="text-red-400 text-sm mb-3">{qualityStats.dealsWithoutActivity.length} deals en cours sans AUCUNE activité (appel, email, etc.) - jamais travaillés !</p>
+                <div className="overflow-x-auto max-h-64">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700 text-slate-400">
+                        <th className="p-2 text-left">ID</th>
+                        <th className="p-2 text-left">Nom</th>
+                        <th className="p-2 text-left">Étape</th>
+                        <th className="p-2 text-right">Montant</th>
+                        <th className="p-2 text-right">Âge</th>
+                        <th className="p-2 text-left">Commercial</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {qualityStats.dealsWithoutActivity.slice(0, 30).map(d => (
+                        <tr key={d.id} className="border-b border-slate-800 bg-red-500/10">
+                          <td className="p-2 font-mono text-xs">{d.id}</td>
+                          <td className="p-2 font-medium max-w-[200px] truncate">{d.title}</td>
+                          <td className="p-2"><Badge color="blue" size="xs">{d.stage}</Badge></td>
+                          <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(d.opportunity)}</td>
+                          <td className="p-2 text-right"><Badge color={d.daysOld > 30 ? 'red' : d.daysOld > 7 ? 'yellow' : 'green'} size="xs">{d.daysOld}j</Badge></td>
+                          <td className="p-2">{d.commercial}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            )}
+
+            {/* NOUVEAU: Leads jamais contactés */}
+            {qualityStats.leadsWithoutActivity.length > 0 && (
+              <Card title="☎️ Leads jamais contactés" icon="📵">
+                <p className="text-pink-400 text-sm mb-3">{qualityStats.leadsWithoutActivity.length} leads actifs sans AUCUNE activité - pas encore travaillés</p>
+                <div className="overflow-x-auto max-h-64">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700 text-slate-400">
+                        <th className="p-2 text-left">ID</th>
+                        <th className="p-2 text-left">Nom</th>
+                        <th className="p-2 text-left">Statut</th>
+                        <th className="p-2 text-right">Âge</th>
+                        <th className="p-2 text-left">Commercial</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {qualityStats.leadsWithoutActivity.slice(0, 30).map(l => (
+                        <tr key={l.id} className="border-b border-slate-800 bg-pink-500/10">
+                          <td className="p-2 font-mono text-xs">{l.id}</td>
+                          <td className="p-2 font-medium max-w-[200px] truncate">{l.title}</td>
+                          <td className="p-2"><Badge color="pink" size="xs">{l.status}</Badge></td>
+                          <td className="p-2 text-right"><Badge color={l.daysOld > 30 ? 'red' : l.daysOld > 7 ? 'yellow' : 'green'} size="xs">{l.daysOld}j</Badge></td>
+                          <td className="p-2">{l.commercial}</td>
                         </tr>
                       ))}
                     </tbody>
