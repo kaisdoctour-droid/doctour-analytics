@@ -41,7 +41,8 @@ export async function GET() {
       CURRENCY_ID: d.currency_id,
       LEAD_ID: d.lead_id,
       LAST_ACTIVITY_TIME: d.last_activity_time,
-      LAST_ACTIVITY_BY: d.last_activity_by
+      LAST_ACTIVITY_BY: d.last_activity_by,
+      MOVED_TIME: d.moved_time
     }));
 
     return Response.json({ success: true, data: deals, total: deals.length });
