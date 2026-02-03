@@ -733,6 +733,132 @@ export default function Dashboard() {
     };
   }, [filteredDeals, filteredLeads, rawLeads, getUserName]);
 
+  // ====== DEALS CHAUDS (Avance Reçu + Devis Signé) ======
+  const hotDealsStats = useMemo(() => {
+    const now = new Date();
+    
+    // Filtrer les deals commerciaux (hors C1/C5)
+    const commercialDeals = rawDeals.filter(d => 
+      d.STAGE_ID && !d.STAGE_ID.startsWith('C1:') && !d.STAGE_ID.startsWith('C5:')
+    );
+    
+    // Devis Signés
+    const devisSigne = commercialDeals.filter(d => 
+      d.STAGE_ID && (d.STAGE_ID.includes('PREPAYMENT_INVOICE') || d.STAGE_ID.toLowerCase().includes('devis signé'))
+    );
+    
+    // Avance Reçu (FINAL_INVOICE mais pas APOLOGY)
+    const avanceRecu = commercialDeals.filter(d => 
+      d.STAGE_ID && d.STAGE_ID.includes('FINAL_INVOICE') && !d.STAGE_ID.includes('APOLOGY')
+    );
+    
+    // Billet Avion Reçu
+    const billetRecu = commercialDeals.filter(d => 
+      d.STAGE_ID && d.STAGE_ID.includes('EXECUTING')
+    );
+    
+    // Fonction pour calculer les jours depuis dernier contact
+    const getDaysSinceContact = (d) => {
+      const lastContact = d.LAST_ACTIVITY_TIME || d.DATE_MODIFY;
+      if (!lastContact) return 999;
+      return Math.floor((now - new Date(lastContact)) / (1000 * 60 * 60 * 24));
+    };
+    
+    // Fonction pour calculer les jours en étape actuelle
+    const getDaysInStage = (d) => {
+      // On utilise DATE_MODIFY comme approximation de la date de changement d'étape
+      // Idéalement on aurait un champ dédié
+      const stageDate = d.DATE_MODIFY;
+      if (!stageDate) return 999;
+      return Math.floor((now - new Date(stageDate)) / (1000 * 60 * 60 * 24));
+    };
+    
+    // Mapper les deals avec infos enrichies
+    const mapDeal = (d) => ({
+      id: d.ID,
+      title: d.TITLE || 'Sans nom',
+      stage: DEAL_STAGE_MAP[d.STAGE_ID] || d.STAGE_ID,
+      stageId: d.STAGE_ID,
+      opportunity: parseFloat(d.OPPORTUNITY || 0),
+      dateCreate: d.DATE_CREATE,
+      lastContact: d.LAST_ACTIVITY_TIME || d.DATE_MODIFY,
+      daysSinceContact: getDaysSinceContact(d),
+      daysInStage: getDaysInStage(d),
+      commercial: getUserName(d.ASSIGNED_BY_ID),
+      commercialId: d.ASSIGNED_BY_ID
+    });
+    
+    const devisSigneList = devisSigne.map(mapDeal).sort((a, b) => b.daysSinceContact - a.daysSinceContact);
+    const avanceRecuList = avanceRecu.map(mapDeal).sort((a, b) => b.daysInStage - a.daysInStage);
+    const billetRecuList = billetRecu.map(mapDeal).sort((a, b) => b.daysSinceContact - a.daysSinceContact);
+    
+    // Devis signés en danger (>7j sans contact)
+    const devisEnDanger = devisSigneList.filter(d => d.daysSinceContact > 7);
+    const caDevisEnDanger = devisEnDanger.reduce((sum, d) => sum + d.opportunity, 0);
+    
+    // Avances anciennes (>30j en étape)
+    const avancesAnciennes = avanceRecuList.filter(d => d.daysInStage > 30);
+    const caAvancesAnciennes = avancesAnciennes.reduce((sum, d) => sum + d.opportunity, 0);
+    
+    // CA total des deals chauds
+    const caDevisSigne = devisSigneList.reduce((sum, d) => sum + d.opportunity, 0);
+    const caAvanceRecu = avanceRecuList.reduce((sum, d) => sum + d.opportunity, 0);
+    const caBilletRecu = billetRecuList.reduce((sum, d) => sum + d.opportunity, 0);
+    
+    // Par commercial
+    const byCommercial = {};
+    [...devisSigneList, ...avanceRecuList, ...billetRecuList].forEach(d => {
+      if (!byCommercial[d.commercialId]) {
+        byCommercial[d.commercialId] = {
+          name: d.commercial,
+          devisSigne: 0,
+          avanceRecu: 0,
+          billetRecu: 0,
+          caTotal: 0,
+          enDanger: 0
+        };
+      }
+      if (d.stageId && d.stageId.includes('PREPAYMENT_INVOICE')) {
+        byCommercial[d.commercialId].devisSigne++;
+        if (d.daysSinceContact > 7) byCommercial[d.commercialId].enDanger++;
+      } else if (d.stageId && d.stageId.includes('FINAL_INVOICE')) {
+        byCommercial[d.commercialId].avanceRecu++;
+      } else if (d.stageId && d.stageId.includes('EXECUTING')) {
+        byCommercial[d.commercialId].billetRecu++;
+      }
+      byCommercial[d.commercialId].caTotal += d.opportunity;
+    });
+    
+    return {
+      devisSigne: {
+        total: devisSigneList.length,
+        enDanger: devisEnDanger.length,
+        ca: caDevisSigne,
+        caEnDanger: caDevisEnDanger,
+        list: devisSigneList
+      },
+      avanceRecu: {
+        total: avanceRecuList.length,
+        anciennes: avancesAnciennes.length,
+        ca: caAvanceRecu,
+        caAnciennes: caAvancesAnciennes,
+        list: avanceRecuList
+      },
+      billetRecu: {
+        total: billetRecuList.length,
+        ca: caBilletRecu,
+        list: billetRecuList
+      },
+      totals: {
+        deals: devisSigneList.length + avanceRecuList.length + billetRecuList.length,
+        ca: caDevisSigne + caAvanceRecu + caBilletRecu,
+        enDanger: devisEnDanger.length + avancesAnciennes.length,
+        caEnDanger: caDevisEnDanger + caAvancesAnciennes
+      },
+      byCommercial
+    };
+  }, [rawDeals, getUserName]);
+
   // ====== STATS DU JOUR (AUJOURD'HUI) ======
   const dailyStats = useMemo(() => {
     const dateStr = selectedDayDate;
@@ -1025,6 +1151,7 @@ DOCTOUR Analytics`);
     { id: 'commerciaux', label: 'Commerciaux', icon: '👥' },
     { id: 'sources', label: 'Sources', icon: '🏷️' },
     { id: 'mensuel', label: 'Mensuel', icon: '📆' },
+    { id: 'chauds', label: 'Chauds', icon: '🔥', badge: hotDealsStats.totals.enDanger > 0 ? hotDealsStats.totals.enDanger : null },
     { id: 'delais', label: 'Delais', icon: '⏱️' },
     { id: 'alerts', label: 'Alertes', icon: '🚨', badge: alertsLeads.total + alertsDeals.total },
     { id: 'qualite', label: 'Qualité', icon: '🔍', badge: qualityStats.dealsWithoutLead.won + qualityStats.dealsWithoutLead.inProgress + qualityStats.dealsWithoutActivity.length + qualityStats.leadsWithoutActivity.length }
@@ -1223,6 +1350,193 @@ DOCTOUR Analytics`);
               </table>
             </div>
           </Card>
+        )}
+
+        {/* Onglet Chauds */}
+        {activeTab === 'chauds' && (
+          <div className="space-y-4">
+            {/* KPIs Deals Chauds */}
+            <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+              <KpiCard icon="📝" label="Devis Signés" value={hotDealsStats.devisSigne.total} subtext={formatCurrency(hotDealsStats.devisSigne.ca)} color="blue" />
+              <KpiCard icon="🚨" label="Devis en danger" value={hotDealsStats.devisSigne.enDanger} subtext={`>7j sans contact`} color="red" />
+              <KpiCard icon="💰" label="Avances Reçues" value={hotDealsStats.avanceRecu.total} subtext={formatCurrency(hotDealsStats.avanceRecu.ca)} color="green" />
+              <KpiCard icon="⏰" label="Avances >30j" value={hotDealsStats.avanceRecu.anciennes} subtext="À suivre" color="orange" />
+              <KpiCard icon="✈️" label="Billets Reçus" value={hotDealsStats.billetRecu.total} subtext={formatCurrency(hotDealsStats.billetRecu.ca)} color="purple" />
+              <KpiCard icon="💎" label="CA Total Chaud" value={formatCurrency(hotDealsStats.totals.ca)} subtext={`${hotDealsStats.totals.deals} deals`} color="cyan" />
+            </div>
+
+            {/* Alerte CA en danger */}
+            {hotDealsStats.totals.enDanger > 0 && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+                <div className="flex items-center gap-3">
+                  <span className="text-3xl">⚠️</span>
+                  <div>
+                    <p className="text-red-400 font-bold text-lg">CA en danger : {formatCurrency(hotDealsStats.totals.caEnDanger)}</p>
+                    <p className="text-slate-400 text-sm">{hotDealsStats.devisSigne.enDanger} devis signés sans contact &gt;7j + {hotDealsStats.avanceRecu.anciennes} avances &gt;30j en étape</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Devis Signés en danger */}
+            {hotDealsStats.devisSigne.enDanger > 0 && (
+              <Card title="🚨 Devis Signés en danger (>7j sans contact)" icon="📝">
+                <p className="text-red-400 text-sm mb-3">Ces patients ont signé mais n'ont pas été recontactés depuis plus de 7 jours - risque de perte !</p>
+                <div className="overflow-x-auto max-h-64">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700 text-slate-400">
+                        <th className="p-2 text-left">ID</th>
+                        <th className="p-2 text-left">Patient</th>
+                        <th className="p-2 text-right">Montant</th>
+                        <th className="p-2 text-right">Sans contact</th>
+                        <th className="p-2 text-left">Commercial</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {hotDealsStats.devisSigne.list.filter(d => d.daysSinceContact > 7).map(d => (
+                        <tr key={d.id} className="border-b border-slate-800 bg-red-500/10">
+                          <td className="p-2 font-mono text-xs">{d.id}</td>
+                          <td className="p-2 font-medium max-w-[200px] truncate">{d.title}</td>
+                          <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(d.opportunity)}</td>
+                          <td className="p-2 text-right"><Badge color={d.daysSinceContact > 14 ? 'red' : 'yellow'} size="xs">{d.daysSinceContact}j</Badge></td>
+                          <td className="p-2">{d.commercial}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            )}
+
+            {/* Tous les Devis Signés */}
+            <Card title="📝 Tous les Devis Signés" icon="📋">
+              <p className="text-slate-400 text-sm mb-3">{hotDealsStats.devisSigne.total} deals en attente de paiement d'avance</p>
+              <div className="overflow-x-auto max-h-64">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700 text-slate-400">
+                      <th className="p-2 text-left">ID</th>
+                      <th className="p-2 text-left">Patient</th>
+                      <th className="p-2 text-right">Montant</th>
+                      <th className="p-2 text-right">Sans contact</th>
+                      <th className="p-2 text-left">Dernier contact</th>
+                      <th className="p-2 text-left">Commercial</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hotDealsStats.devisSigne.list.map(d => (
+                      <tr key={d.id} className={`border-b border-slate-800 ${d.daysSinceContact > 7 ? 'bg-red-500/10' : d.daysSinceContact > 3 ? 'bg-yellow-500/10' : ''}`}>
+                        <td className="p-2 font-mono text-xs">{d.id}</td>
+                        <td className="p-2 font-medium max-w-[200px] truncate">{d.title}</td>
+                        <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(d.opportunity)}</td>
+                        <td className="p-2 text-right"><Badge color={d.daysSinceContact > 7 ? 'red' : d.daysSinceContact > 3 ? 'yellow' : 'green'} size="xs">{d.daysSinceContact}j</Badge></td>
+                        <td className="p-2 text-slate-400 text-xs">{formatDate(d.lastContact)}</td>
+                        <td className="p-2">{d.commercial}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+
+            {/* Avances Reçues */}
+            <Card title="💰 Avances Reçues - Suivi" icon="📋">
+              <p className="text-slate-400 text-sm mb-3">{hotDealsStats.avanceRecu.total} patients ayant versé une avance - triés par ancienneté</p>
+              <div className="overflow-x-auto max-h-96">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700 text-slate-400">
+                      <th className="p-2 text-left">ID</th>
+                      <th className="p-2 text-left">Patient</th>
+                      <th className="p-2 text-right">Montant</th>
+                      <th className="p-2 text-right">En étape depuis</th>
+                      <th className="p-2 text-right">Sans contact</th>
+                      <th className="p-2 text-left">Dernier contact</th>
+                      <th className="p-2 text-left">Commercial</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hotDealsStats.avanceRecu.list.map(d => (
+                      <tr key={d.id} className={`border-b border-slate-800 ${d.daysInStage > 90 ? 'bg-red-500/10' : d.daysInStage > 30 ? 'bg-orange-500/10' : ''}`}>
+                        <td className="p-2 font-mono text-xs">{d.id}</td>
+                        <td className="p-2 font-medium max-w-[200px] truncate">{d.title}</td>
+                        <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(d.opportunity)}</td>
+                        <td className="p-2 text-right"><Badge color={d.daysInStage > 90 ? 'red' : d.daysInStage > 30 ? 'orange' : 'green'} size="xs">{d.daysInStage}j</Badge></td>
+                        <td className="p-2 text-right"><Badge color={d.daysSinceContact > 14 ? 'red' : d.daysSinceContact > 7 ? 'yellow' : 'green'} size="xs">{d.daysSinceContact}j</Badge></td>
+                        <td className="p-2 text-slate-400 text-xs">{formatDate(d.lastContact)}</td>
+                        <td className="p-2">{d.commercial}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+
+            {/* Billets Avion Reçus */}
+            {hotDealsStats.billetRecu.total > 0 && (
+              <Card title="✈️ Billets Avion Reçus" icon="🛫">
+                <p className="text-slate-400 text-sm mb-3">{hotDealsStats.billetRecu.total} patients avec billet - opération imminente</p>
+                <div className="overflow-x-auto max-h-64">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700 text-slate-400">
+                        <th className="p-2 text-left">ID</th>
+                        <th className="p-2 text-left">Patient</th>
+                        <th className="p-2 text-right">Montant</th>
+                        <th className="p-2 text-right">Sans contact</th>
+                        <th className="p-2 text-left">Commercial</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {hotDealsStats.billetRecu.list.map(d => (
+                        <tr key={d.id} className="border-b border-slate-800 bg-purple-500/10">
+                          <td className="p-2 font-mono text-xs">{d.id}</td>
+                          <td className="p-2 font-medium max-w-[200px] truncate">{d.title}</td>
+                          <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(d.opportunity)}</td>
+                          <td className="p-2 text-right"><Badge color={d.daysSinceContact > 3 ? 'red' : 'green'} size="xs">{d.daysSinceContact}j</Badge></td>
+                          <td className="p-2">{d.commercial}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            )}
+
+            {/* Récap par commercial */}
+            <Card title="👥 Récap par commercial" icon="📊">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700 text-slate-400">
+                      <th className="p-2 text-left">Commercial</th>
+                      <th className="p-2 text-right">Devis Signés</th>
+                      <th className="p-2 text-right">Avances</th>
+                      <th className="p-2 text-right">Billets</th>
+                      <th className="p-2 text-right">CA Total</th>
+                      <th className="p-2 text-right">En danger</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(hotDealsStats.byCommercial)
+                      .filter(([_, data]) => data.name && data.name !== 'Inconnu' && !data.name.toLowerCase().includes('test'))
+                      .sort((a, b) => b[1].caTotal - a[1].caTotal)
+                      .map(([id, data]) => (
+                        <tr key={id} className="border-b border-slate-800">
+                          <td className="p-2 font-medium">{data.name}</td>
+                          <td className="p-2 text-right"><Badge color="blue" size="xs">{data.devisSigne}</Badge></td>
+                          <td className="p-2 text-right"><Badge color="green" size="xs">{data.avanceRecu}</Badge></td>
+                          <td className="p-2 text-right"><Badge color="purple" size="xs">{data.billetRecu}</Badge></td>
+                          <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(data.caTotal)}</td>
+                          <td className="p-2 text-right">{data.enDanger > 0 ? <Badge color="red" size="xs">{data.enDanger}</Badge> : '-'}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
         )}
 
         {activeTab === 'delais' && (
