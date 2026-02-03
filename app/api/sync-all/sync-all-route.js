@@ -39,7 +39,7 @@ export async function GET(request) {
     },
     deals: {
       endpoint: 'crm.deal.list',
-      fields: ['ID', 'TITLE', 'STAGE_ID', 'ASSIGNED_BY_ID', 'DATE_CREATE', 'DATE_MODIFY', 'CLOSEDATE', 'OPPORTUNITY', 'CURRENCY_ID', 'LEAD_ID', 'LAST_ACTIVITY_TIME', 'LAST_ACTIVITY_BY'],
+      fields: ['ID', 'TITLE', 'STAGE_ID', 'ASSIGNED_BY_ID', 'DATE_CREATE', 'DATE_MODIFY', 'CLOSEDATE', 'OPPORTUNITY', 'CURRENCY_ID', 'LEAD_ID', 'LAST_ACTIVITY_TIME', 'LAST_ACTIVITY_BY', 'MOVED_TIME'],
       transform: (d) => ({
         id: d.ID, 
         title: d.TITLE || null, 
@@ -53,6 +53,7 @@ export async function GET(request) {
         lead_id: d.LEAD_ID || null, 
         last_activity_time: cleanDate(d.LAST_ACTIVITY_TIME),
         last_activity_by: d.LAST_ACTIVITY_BY || null,
+        moved_time: cleanDate(d.MOVED_TIME),
         updated_at: new Date().toISOString()
       })
     }
