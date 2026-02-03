@@ -737,6 +737,18 @@ export default function Dashboard() {
   const hotDealsStats = useMemo(() => {
     const now = new Date();
     
+    // Créer un index des dernières activités par deal (owner_type_id = '2')
+    const lastActivityByDeal = {};
+    rawActivities.forEach(a => {
+      if (a.OWNER_TYPE_ID === '2') {
+        const dealId = a.OWNER_ID;
+        const actDate = a.CREATED ? new Date(a.CREATED) : null;
+        if (actDate && (!lastActivityByDeal[dealId] || actDate > lastActivityByDeal[dealId])) {
+          lastActivityByDeal[dealId] = actDate;
+        }
+      }
+    });
+    
     // Filtrer les deals commerciaux (hors C1/C5)
     const commercialDeals = rawDeals.filter(d => 
       d.STAGE_ID && !d.STAGE_ID.startsWith('C1:') && !d.STAGE_ID.startsWith('C5:')
@@ -758,10 +770,32 @@ export default function Dashboard() {
     );
     
     // Fonction pour calculer les jours depuis dernier contact
+    // Prend le MAX entre LAST_ACTIVITY_TIME (Bitrix) et la dernière activité dans notre table
     const getDaysSinceContact = (d) => {
-      const lastContact = d.LAST_ACTIVITY_TIME || d.DATE_MODIFY;
+      const bitrixDate = d.LAST_ACTIVITY_TIME ? new Date(d.LAST_ACTIVITY_TIME) : null;
+      const activityDate = lastActivityByDeal[d.ID] || null;
+      
+      // Prendre la date la plus récente
+      let lastContact = null;
+      if (bitrixDate && activityDate) {
+        lastContact = bitrixDate > activityDate ? bitrixDate : activityDate;
+      } else {
+        lastContact = bitrixDate || activityDate || (d.DATE_MODIFY ? new Date(d.DATE_MODIFY) : null);
+      }
+      
       if (!lastContact) return 999;
-      return Math.floor((now - new Date(lastContact)) / (1000 * 60 * 60 * 24));
+      return Math.floor((now - lastContact) / (1000 * 60 * 60 * 24));
+    };
+    
+    // Fonction pour obtenir la date du dernier contact
+    const getLastContactDate = (d) => {
+      const bitrixDate = d.LAST_ACTIVITY_TIME ? new Date(d.LAST_ACTIVITY_TIME) : null;
+      const activityDate = lastActivityByDeal[d.ID] || null;
+      
+      if (bitrixDate && activityDate) {
+        return bitrixDate > activityDate ? bitrixDate : activityDate;
+      }
+      return bitrixDate || activityDate || (d.DATE_MODIFY ? new Date(d.DATE_MODIFY) : null);
     };
     
     // Fonction pour calculer les jours en étape actuelle
@@ -781,7 +815,7 @@ export default function Dashboard() {
       stageId: d.STAGE_ID,
       opportunity: parseFloat(d.OPPORTUNITY || 0),
       dateCreate: d.DATE_CREATE,
-      lastContact: d.LAST_ACTIVITY_TIME || d.DATE_MODIFY,
+      lastContact: getLastContactDate(d),
       daysSinceContact: getDaysSinceContact(d),
       movedTime: d.MOVED_TIME,
       daysInStage: getDaysInStage(d),
@@ -858,7 +892,7 @@ export default function Dashboard() {
       },
       byCommercial
     };
-  }, [rawDeals, getUserName]);
+  }, [rawDeals, rawActivities, getUserName]);
 
   // ====== STATS DU JOUR (AUJOURD'HUI) ======
   const dailyStats = useMemo(() => {
