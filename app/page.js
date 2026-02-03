@@ -685,6 +685,39 @@ export default function Dashboard() {
       commercial: getUserName(l.ASSIGNED_BY_ID)
     })).sort((a, b) => b.daysOld - a.daysOld);
     
+    // === NOUVEAU: Leads/Deals assignés à des utilisateurs inactifs ===
+    const activeUserIds = new Set(rawUsers.map(u => u.ID));
+    
+    const leadsOrphelins = rawLeads.filter(l => 
+      l.ASSIGNED_BY_ID && 
+      !activeUserIds.has(l.ASSIGNED_BY_ID) &&
+      l.STATUS_ID && l.STATUS_ID !== 'CONVERTED' && l.STATUS_ID !== 'JUNK'
+    ).map(l => ({
+      id: l.ID,
+      title: l.NAME || l.TITLE || 'Sans nom',
+      status: LEAD_STATUS_MAP[l.STATUS_ID] || l.STATUS_ID,
+      statusId: l.STATUS_ID,
+      dateCreate: l.DATE_CREATE,
+      daysOld: l.DATE_CREATE ? Math.floor((new Date() - new Date(l.DATE_CREATE)) / (1000 * 60 * 60 * 24)) : 0,
+      commercialId: l.ASSIGNED_BY_ID
+    })).sort((a, b) => b.daysOld - a.daysOld);
+    
+    const dealsOrphelins = rawDeals.filter(d => 
+      d.ASSIGNED_BY_ID && 
+      !activeUserIds.has(d.ASSIGNED_BY_ID) &&
+      d.STAGE_ID && !d.STAGE_ID.includes('WON') && !d.STAGE_ID.includes('LOSE') && !d.STAGE_ID.includes('APOLOGY') &&
+      !d.STAGE_ID.startsWith('C1:') && !d.STAGE_ID.startsWith('C5:')
+    ).map(d => ({
+      id: d.ID,
+      title: d.TITLE || 'Sans nom',
+      stage: DEAL_STAGE_MAP[d.STAGE_ID] || d.STAGE_ID,
+      stageId: d.STAGE_ID,
+      opportunity: d.OPPORTUNITY,
+      dateCreate: d.DATE_CREATE,
+      daysOld: d.DATE_CREATE ? Math.floor((new Date() - new Date(d.DATE_CREATE)) / (1000 * 60 * 60 * 24)) : 0,
+      commercialId: d.ASSIGNED_BY_ID
+    })).sort((a, b) => b.daysOld - a.daysOld);
+    
     // Clients fidèles (leads avec plusieurs deals Won)
     const leadDealsCount = {};
     filteredDeals.forEach(d => {
@@ -756,6 +789,8 @@ export default function Dashboard() {
       },
       dealsWithoutActivity,
       leadsWithoutActivity,
+      leadsOrphelins,
+      dealsOrphelins,
       loyalClients
     };
   }, [filteredDeals, filteredLeads, rawLeads, getUserName]);
@@ -932,6 +967,9 @@ export default function Dashboard() {
     const now = new Date();
     const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
     
+    // Liste des IDs utilisateurs actifs (chargés par l'API)
+    const activeUserIds = new Set(rawUsers.map(u => u.ID));
+    
     // Filtrer les données des 60 derniers jours
     const recentLeads = rawLeads.filter(l => l.DATE_CREATE && new Date(l.DATE_CREATE) >= sixtyDaysAgo);
     const recentDeals = rawDeals.filter(d => 
@@ -955,15 +993,15 @@ export default function Dashboard() {
     // Calculer les stats par commercial
     const commercialAllocation = {};
     
-    // Identifier les commerciaux actifs (ceux qui ont des leads ou deals récents)
+    // Identifier les commerciaux actifs (ceux qui ont des leads ou deals récents ET sont dans rawUsers)
     const activeCommercialIds = new Set();
     recentLeads.forEach(l => {
-      if (l.ASSIGNED_BY_ID && !shouldExcludeFromStats(getUserName(l.ASSIGNED_BY_ID))) {
+      if (l.ASSIGNED_BY_ID && activeUserIds.has(l.ASSIGNED_BY_ID) && !shouldExcludeFromStats(getUserName(l.ASSIGNED_BY_ID))) {
         activeCommercialIds.add(l.ASSIGNED_BY_ID);
       }
     });
     recentDeals.forEach(d => {
-      if (d.ASSIGNED_BY_ID && !shouldExcludeFromStats(getUserName(d.ASSIGNED_BY_ID))) {
+      if (d.ASSIGNED_BY_ID && activeUserIds.has(d.ASSIGNED_BY_ID) && !shouldExcludeFromStats(getUserName(d.ASSIGNED_BY_ID))) {
         activeCommercialIds.add(d.ASSIGNED_BY_ID);
       }
     });
@@ -1425,7 +1463,7 @@ DOCTOUR Analytics`);
     { id: 'chauds', label: 'Chauds', icon: '🔥', badge: hotDealsStats.totals.enDanger > 0 ? hotDealsStats.totals.enDanger : null },
     { id: 'delais', label: 'Delais', icon: '⏱️' },
     { id: 'alerts', label: 'Alertes', icon: '🚨', badge: alertsLeads.total + alertsDeals.total },
-    { id: 'qualite', label: 'Qualité', icon: '🔍', badge: qualityStats.dealsWithoutLead.won + qualityStats.dealsWithoutLead.inProgress + qualityStats.dealsWithoutActivity.length + qualityStats.leadsWithoutActivity.length },
+    { id: 'qualite', label: 'Qualité', icon: '🔍', badge: qualityStats.dealsWithoutLead.won + qualityStats.dealsWithoutLead.inProgress + qualityStats.dealsWithoutActivity.length + qualityStats.leadsWithoutActivity.length + qualityStats.leadsOrphelins.length + qualityStats.dealsOrphelins.length },
     { id: 'allocation', label: 'Allocation', icon: '🎯' }
   ];
 
@@ -2129,13 +2167,14 @@ DOCTOUR Analytics`);
         {activeTab === 'qualite' && (
           <div className="space-y-4">
             {/* KPIs Qualité */}
-            <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
               <KpiCard icon="⚠️" label="Deals sans lead" value={qualityStats.dealsWithoutLead.total} subtext="Total orphelins" color="orange" />
               <KpiCard icon="🚨" label="Won sans lead" value={qualityStats.dealsWithoutLead.won} subtext="Critique - pas de traçabilité" color="red" />
               <KpiCard icon="⏳" label="En cours sans lead" value={qualityStats.dealsWithoutLead.inProgress} subtext="À surveiller" color="yellow" />
               <KpiCard icon="📵" label="Deals jamais contactés" value={qualityStats.dealsWithoutActivity.length} subtext="Aucune activité" color="red" />
               <KpiCard icon="☎️" label="Leads jamais contactés" value={qualityStats.leadsWithoutActivity.length} subtext="Aucune activité" color="pink" />
-              <KpiCard icon="👑" label="Clients fidèles" value={qualityStats.loyalClients.length} subtext="Multi-Won" color="purple" />
+              <KpiCard icon="👻" label="Fiches orphelines" value={qualityStats.leadsOrphelins.length + qualityStats.dealsOrphelins.length} subtext="Commerciaux inactifs" color="purple" />
+              <KpiCard icon="👑" label="Clients fidèles" value={qualityStats.loyalClients.length} subtext="Multi-Won" color="green" />
             </div>
 
             {/* Boutons d'action */}
@@ -2143,6 +2182,78 @@ DOCTOUR Analytics`);
               <Button onClick={() => exportQualityCSV()} variant="secondary" size="sm">📥 Exporter CSV</Button>
               <Button onClick={() => sendQualityReportToYosra()} variant="success" size="sm">📧 Envoyer à Yosra</Button>
             </div>
+
+            {/* NOUVEAU: Fiches orphelines (commerciaux inactifs) */}
+            {(qualityStats.leadsOrphelins.length > 0 || qualityStats.dealsOrphelins.length > 0) && (
+              <Card title="👻 Fiches orphelines (commerciaux inactifs)" icon="⚠️">
+                <p className="text-purple-400 text-sm mb-3">
+                  Ces fiches sont assignées à des commerciaux qui ne sont plus actifs. 
+                  <span className="text-white font-bold ml-2">À réassigner !</span>
+                </p>
+                
+                {qualityStats.leadsOrphelins.length > 0 && (
+                  <div className="mb-4">
+                    <h4 className="text-sm font-bold text-slate-300 mb-2">📋 Leads orphelins ({qualityStats.leadsOrphelins.length})</h4>
+                    <div className="overflow-x-auto max-h-48">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-700 text-slate-400">
+                            <th className="p-2 text-left">ID</th>
+                            <th className="p-2 text-left">Nom</th>
+                            <th className="p-2 text-left">Status</th>
+                            <th className="p-2 text-right">Âge</th>
+                            <th className="p-2 text-left">Commercial ID</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {qualityStats.leadsOrphelins.slice(0, 20).map(l => (
+                            <tr key={l.id} className="border-b border-slate-800 bg-purple-500/10">
+                              <td className="p-2 font-mono text-xs">{l.id}</td>
+                              <td className="p-2 font-medium max-w-[200px] truncate">{l.title}</td>
+                              <td className="p-2"><Badge color="yellow" size="xs">{l.status}</Badge></td>
+                              <td className="p-2 text-right"><Badge color={l.daysOld > 30 ? 'red' : 'yellow'} size="xs">{l.daysOld}j</Badge></td>
+                              <td className="p-2 text-slate-500">#{l.commercialId} (inactif)</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                
+                {qualityStats.dealsOrphelins.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-300 mb-2">💼 Deals orphelins ({qualityStats.dealsOrphelins.length})</h4>
+                    <div className="overflow-x-auto max-h-48">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-700 text-slate-400">
+                            <th className="p-2 text-left">ID</th>
+                            <th className="p-2 text-left">Nom</th>
+                            <th className="p-2 text-left">Étape</th>
+                            <th className="p-2 text-right">Montant</th>
+                            <th className="p-2 text-right">Âge</th>
+                            <th className="p-2 text-left">Commercial ID</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {qualityStats.dealsOrphelins.slice(0, 20).map(d => (
+                            <tr key={d.id} className="border-b border-slate-800 bg-purple-500/10">
+                              <td className="p-2 font-mono text-xs">{d.id}</td>
+                              <td className="p-2 font-medium max-w-[200px] truncate">{d.title}</td>
+                              <td className="p-2"><Badge color="blue" size="xs">{d.stage}</Badge></td>
+                              <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(d.opportunity)}</td>
+                              <td className="p-2 text-right"><Badge color={d.daysOld > 30 ? 'red' : 'yellow'} size="xs">{d.daysOld}j</Badge></td>
+                              <td className="p-2 text-slate-500">#{d.commercialId} (inactif)</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </Card>
+            )}
 
             {/* Deals Won sans lead - Critique */}
             {qualityStats.dealsWithoutLead.won > 0 && (
