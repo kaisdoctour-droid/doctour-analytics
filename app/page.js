@@ -717,15 +717,42 @@ export default function Dashboard() {
         inProgress: inProgressWithoutLead.length,
         lost: lostWithoutLead.length,
         byCommercial,
-        list: dealsWithoutLead.map(d => ({
-          id: d.ID,
-          title: d.TITLE || 'Sans nom',
-          stage: DEAL_STAGE_MAP[d.STAGE_ID] || d.STAGE_ID,
-          stageId: d.STAGE_ID,
-          opportunity: d.OPPORTUNITY,
-          dateCreate: d.DATE_CREATE,
-          commercial: getUserName(d.ASSIGNED_BY_ID)
-        })).sort((a, b) => new Date(b.dateCreate) - new Date(a.dateCreate))
+        list: dealsWithoutLead.map(d => {
+          // Chercher un lead potentiel avec le même nom (normalisation)
+          const dealTitle = (d.TITLE || '').toLowerCase().trim();
+          const matchingLead = rawLeads.find(l => {
+            const leadName = (l.NAME || l.TITLE || '').toLowerCase().trim();
+            // Match si le nom du lead contient le nom du deal ou vice versa (au moins 3 caractères)
+            if (dealTitle.length < 3 || leadName.length < 3) return false;
+            return leadName.includes(dealTitle) || dealTitle.includes(leadName) || 
+                   // Match par mots clés (prénom ou nom)
+                   dealTitle.split(' ').some(word => word.length > 2 && leadName.includes(word)) ||
+                   leadName.split(' ').some(word => word.length > 2 && dealTitle.includes(word));
+          });
+          
+          // Vérifier si c'est un conflit (lead assigné à quelqu'un d'autre)
+          const hasConflict = matchingLead && matchingLead.ASSIGNED_BY_ID !== d.ASSIGNED_BY_ID;
+          
+          return {
+            id: d.ID,
+            title: d.TITLE || 'Sans nom',
+            stage: DEAL_STAGE_MAP[d.STAGE_ID] || d.STAGE_ID,
+            stageId: d.STAGE_ID,
+            opportunity: d.OPPORTUNITY,
+            dateCreate: d.DATE_CREATE,
+            commercial: getUserName(d.ASSIGNED_BY_ID),
+            commercialId: d.ASSIGNED_BY_ID,
+            // Info sur le lead potentiel
+            matchingLead: matchingLead ? {
+              id: matchingLead.ID,
+              name: matchingLead.NAME || matchingLead.TITLE,
+              commercial: getUserName(matchingLead.ASSIGNED_BY_ID),
+              commercialId: matchingLead.ASSIGNED_BY_ID,
+              status: matchingLead.STATUS_ID
+            } : null,
+            hasConflict
+          };
+        }).sort((a, b) => new Date(b.dateCreate) - new Date(a.dateCreate))
       },
       dealsWithoutActivity,
       leadsWithoutActivity,
@@ -1957,16 +1984,29 @@ DOCTOUR Analytics`);
                         <th className="p-2 text-left">Étape</th>
                         <th className="p-2 text-right">Montant</th>
                         <th className="p-2 text-left">Commercial</th>
+                        <th className="p-2 text-left">Note</th>
                       </tr>
                     </thead>
                     <tbody>
                       {qualityStats.dealsWithoutLead.list.filter(d => d.stageId && !d.stageId.includes('WON') && !d.stageId.includes('LOSE') && !d.stageId.includes('APOLOGY')).slice(0, 20).map(d => (
-                        <tr key={d.id} className="border-b border-slate-800">
+                        <tr key={d.id} className={`border-b border-slate-800 ${d.hasConflict ? 'bg-orange-500/10' : ''}`}>
                           <td className="p-2 font-mono text-xs">{d.id}</td>
                           <td className="p-2 font-medium max-w-[200px] truncate">{d.title}</td>
                           <td className="p-2"><Badge color="yellow" size="xs">{d.stage}</Badge></td>
                           <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(d.opportunity)}</td>
                           <td className="p-2">{d.commercial}</td>
+                          <td className="p-2 text-xs">
+                            {d.hasConflict && d.matchingLead && (
+                              <span className="text-orange-400" title={`Lead #${d.matchingLead.id} assigné à ${d.matchingLead.commercial}`}>
+                                ⚠️ Lead #{d.matchingLead.id} chez {d.matchingLead.commercial}
+                              </span>
+                            )}
+                            {!d.hasConflict && d.matchingLead && (
+                              <span className="text-emerald-400" title={`Lead #${d.matchingLead.id} trouvé chez le même commercial`}>
+                                ✓ Lead #{d.matchingLead.id} trouvé
+                              </span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
