@@ -766,9 +766,9 @@ export default function Dashboard() {
     
     // Fonction pour calculer les jours en étape actuelle
     const getDaysInStage = (d) => {
-      // On utilise DATE_MODIFY comme approximation de la date de changement d'étape
-      // Idéalement on aurait un champ dédié
-      const stageDate = d.DATE_MODIFY;
+      // Utiliser MOVED_TIME (vraie date de changement d'étape) si disponible
+      // Sinon fallback sur DATE_MODIFY
+      const stageDate = d.MOVED_TIME || d.DATE_MODIFY;
       if (!stageDate) return 999;
       return Math.floor((now - new Date(stageDate)) / (1000 * 60 * 60 * 24));
     };
@@ -783,6 +783,7 @@ export default function Dashboard() {
       dateCreate: d.DATE_CREATE,
       lastContact: d.LAST_ACTIVITY_TIME || d.DATE_MODIFY,
       daysSinceContact: getDaysSinceContact(d),
+      movedTime: d.MOVED_TIME,
       daysInStage: getDaysInStage(d),
       commercial: getUserName(d.ASSIGNED_BY_ID),
       commercialId: d.ASSIGNED_BY_ID
