@@ -927,7 +927,210 @@ export default function Dashboard() {
     };
   }, [rawDeals, rawActivities, dealsWithPendingReminder, getUserName]);
 
-  // ====== STATS DU JOUR (AUJOURD'HUI) ======
+  // ====== ALGORITHME D'ALLOCATION DE LEADS ======
+  const allocationStats = useMemo(() => {
+    const now = new Date();
+    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+    
+    // Filtrer les données des 60 derniers jours
+    const recentLeads = rawLeads.filter(l => l.DATE_CREATE && new Date(l.DATE_CREATE) >= sixtyDaysAgo);
+    const recentDeals = rawDeals.filter(d => 
+      d.DATE_CREATE && new Date(d.DATE_CREATE) >= sixtyDaysAgo &&
+      d.STAGE_ID && !d.STAGE_ID.startsWith('C1:') && !d.STAGE_ID.startsWith('C5:')
+    );
+    
+    // Index des activités par lead et par deal
+    const activitiesByLead = {};
+    const activitiesByDeal = {};
+    rawActivities.forEach(a => {
+      if (a.OWNER_TYPE_ID === '1') {
+        if (!activitiesByLead[a.OWNER_ID]) activitiesByLead[a.OWNER_ID] = [];
+        activitiesByLead[a.OWNER_ID].push(a);
+      } else if (a.OWNER_TYPE_ID === '2') {
+        if (!activitiesByDeal[a.OWNER_ID]) activitiesByDeal[a.OWNER_ID] = [];
+        activitiesByDeal[a.OWNER_ID].push(a);
+      }
+    });
+    
+    // Calculer les stats par commercial
+    const commercialAllocation = {};
+    
+    // Identifier les commerciaux actifs (ceux qui ont des leads ou deals récents)
+    const activeCommercialIds = new Set();
+    recentLeads.forEach(l => {
+      if (l.ASSIGNED_BY_ID && !shouldExcludeFromStats(getUserName(l.ASSIGNED_BY_ID))) {
+        activeCommercialIds.add(l.ASSIGNED_BY_ID);
+      }
+    });
+    recentDeals.forEach(d => {
+      if (d.ASSIGNED_BY_ID && !shouldExcludeFromStats(getUserName(d.ASSIGNED_BY_ID))) {
+        activeCommercialIds.add(d.ASSIGNED_BY_ID);
+      }
+    });
+    
+    activeCommercialIds.forEach(commercialId => {
+      const name = getUserName(commercialId);
+      if (shouldExcludeFromStats(name)) return;
+      
+      // Leads du commercial (60 derniers jours)
+      const leads = recentLeads.filter(l => l.ASSIGNED_BY_ID === commercialId);
+      const deals = recentDeals.filter(d => d.ASSIGNED_BY_ID === commercialId);
+      
+      // === 1. TAUX DE CLOSING ===
+      const converted = leads.filter(l => l.STATUS_ID === 'CONVERTED').length;
+      const wonDeals = deals.filter(d => d.STAGE_ID && d.STAGE_ID.includes('WON'));
+      const avanceDeals = deals.filter(d => d.STAGE_ID && d.STAGE_ID.includes('FINAL_INVOICE') && !d.STAGE_ID.includes('APOLOGY'));
+      const ventes = wonDeals.length + avanceDeals.length;
+      const txClosing = converted > 0 ? (ventes / converted) * 100 : 0;
+      
+      // Score closing (35 pts max) - objectif 15%
+      const scoreClosing = Math.min(35, (txClosing / 15) * 35);
+      
+      // === 2. DÉLAI MOYEN 1ER CONTACT ===
+      const leadsWithFirstContact = leads.map(l => {
+        const activities = activitiesByLead[l.ID] || [];
+        if (activities.length === 0) return null;
+        const firstActivity = activities.sort((a, b) => new Date(a.CREATED) - new Date(b.CREATED))[0];
+        if (!firstActivity || !l.DATE_CREATE) return null;
+        const delay = (new Date(firstActivity.CREATED) - new Date(l.DATE_CREATE)) / (1000 * 60 * 60 * 24);
+        return delay;
+      }).filter(d => d !== null && d >= 0);
+      
+      const avgDelaiContact = leadsWithFirstContact.length > 0 
+        ? leadsWithFirstContact.reduce((a, b) => a + b, 0) / leadsWithFirstContact.length 
+        : 999;
+      
+      // Score réactivité (25 pts max)
+      let scoreReactivite = 0;
+      if (avgDelaiContact <= 1) scoreReactivite = 25;
+      else if (avgDelaiContact <= 2) scoreReactivite = 20;
+      else if (avgDelaiContact <= 3) scoreReactivite = 15;
+      else if (avgDelaiContact <= 5) scoreReactivite = 10;
+      else scoreReactivite = 0;
+      
+      // === 3. % LEADS EN RETARD (>3j sans contact) ===
+      const leadsEnCours = rawLeads.filter(l => 
+        l.ASSIGNED_BY_ID === commercialId &&
+        l.STATUS_ID && l.STATUS_ID !== 'CONVERTED' && l.STATUS_ID !== 'JUNK'
+      );
+      const leadsEnRetard = leadsEnCours.filter(l => {
+        const lastActivity = l.LAST_ACTIVITY_TIME || l.DATE_MODIFY;
+        if (!lastActivity) return true;
+        const days = (now - new Date(lastActivity)) / (1000 * 60 * 60 * 24);
+        return days > 3;
+      });
+      const pctRetard = leadsEnCours.length > 0 ? (leadsEnRetard.length / leadsEnCours.length) * 100 : 0;
+      
+      // Score saturation (20 pts max)
+      const scoreSaturation = Math.max(0, 20 - (pctRetard * 0.4));
+      
+      // === 4. % LEADS JAMAIS CONTACTÉS ===
+      const leadsJamaisContactes = leads.filter(l => {
+        const activities = activitiesByLead[l.ID] || [];
+        return activities.length === 0 && !l.LAST_ACTIVITY_TIME;
+      });
+      const pctJamaisContactes = leads.length > 0 ? (leadsJamaisContactes.length / leads.length) * 100 : 0;
+      
+      // Score gaspillage (15 pts max)
+      const scoreGaspillage = Math.max(0, 15 - (pctJamaisContactes * 0.3));
+      
+      // === 5. FICHES TOUCHÉES PAR JOUR ===
+      const activitesRecentes = rawActivities.filter(a => 
+        a.RESPONSIBLE_ID === commercialId &&
+        a.CREATED && new Date(a.CREATED) >= sixtyDaysAgo
+      );
+      const joursOuvres = 40; // ~60 jours calendaires = ~40 jours ouvrés
+      const fichesParJour = activitesRecentes.length / joursOuvres;
+      
+      // Score volume (5 pts max) - objectif 15 fiches/jour
+      const scoreVolume = Math.min(5, (fichesParJour / 15) * 5);
+      
+      // === SCORE TOTAL ===
+      const scoreTotal = Math.round(scoreClosing + scoreReactivite + scoreSaturation + scoreGaspillage + scoreVolume);
+      
+      // === CAPACITÉ DISPONIBLE ===
+      const seuilRetard = 10; // Max leads en retard toléré
+      const capacite = Math.max(0, seuilRetard - leadsEnRetard.length);
+      
+      // === RECOMMANDATION ===
+      let recommandation = 'stop';
+      let couleur = 'red';
+      let leadsParSemaine = 0;
+      
+      if (scoreTotal >= 70 && capacite >= 5) {
+        recommandation = 'prioritaire';
+        couleur = 'green';
+        leadsParSemaine = 15 + Math.floor((scoreTotal - 70) / 10) * 5; // 15-20
+      } else if (scoreTotal >= 60 && capacite >= 3) {
+        recommandation = 'normal';
+        couleur = 'blue';
+        leadsParSemaine = 8 + Math.floor((scoreTotal - 60) / 10) * 4; // 8-12
+      } else if (scoreTotal >= 50 && capacite >= 2) {
+        recommandation = 'limite';
+        couleur = 'yellow';
+        leadsParSemaine = 3 + Math.floor((scoreTotal - 50) / 10) * 2; // 3-5
+      } else {
+        recommandation = 'stop';
+        couleur = 'red';
+        leadsParSemaine = 0;
+      }
+      
+      commercialAllocation[commercialId] = {
+        id: commercialId,
+        name,
+        // Métriques brutes
+        leadsRecus: leads.length,
+        converted,
+        ventes,
+        txClosing: Math.round(txClosing * 10) / 10,
+        avgDelaiContact: avgDelaiContact === 999 ? null : Math.round(avgDelaiContact * 10) / 10,
+        leadsEnCours: leadsEnCours.length,
+        leadsEnRetard: leadsEnRetard.length,
+        pctRetard: Math.round(pctRetard),
+        leadsJamaisContactes: leadsJamaisContactes.length,
+        pctJamaisContactes: Math.round(pctJamaisContactes),
+        fichesParJour: Math.round(fichesParJour * 10) / 10,
+        // Scores détaillés
+        scoreClosing: Math.round(scoreClosing),
+        scoreReactivite: Math.round(scoreReactivite),
+        scoreSaturation: Math.round(scoreSaturation),
+        scoreGaspillage: Math.round(scoreGaspillage),
+        scoreVolume: Math.round(scoreVolume),
+        // Résultats
+        scoreTotal,
+        capacite,
+        recommandation,
+        couleur,
+        leadsParSemaine
+      };
+    });
+    
+    // Convertir en array et trier par score
+    const commerciaux = Object.values(commercialAllocation).sort((a, b) => b.scoreTotal - a.scoreTotal);
+    
+    // Calculs globaux
+    const totalLeadsParSemaine = commerciaux.reduce((sum, c) => sum + c.leadsParSemaine, 0);
+    const budgetHebdo = totalLeadsParSemaine * 6; // CPL = 6€
+    const budgetMensuel = budgetHebdo * 4;
+    
+    // Répartition par recommandation
+    const repartition = {
+      prioritaire: commerciaux.filter(c => c.recommandation === 'prioritaire'),
+      normal: commerciaux.filter(c => c.recommandation === 'normal'),
+      limite: commerciaux.filter(c => c.recommandation === 'limite'),
+      stop: commerciaux.filter(c => c.recommandation === 'stop')
+    };
+    
+    return {
+      commerciaux,
+      totalLeadsParSemaine,
+      budgetHebdo,
+      budgetMensuel,
+      repartition,
+      periode: '60 derniers jours',
+      cpl: 6
+    };
+  }, [rawLeads, rawDeals, rawActivities, getUserName]);
   const dailyStats = useMemo(() => {
     const dateStr = selectedDayDate;
     
@@ -1222,7 +1425,8 @@ DOCTOUR Analytics`);
     { id: 'chauds', label: 'Chauds', icon: '🔥', badge: hotDealsStats.totals.enDanger > 0 ? hotDealsStats.totals.enDanger : null },
     { id: 'delais', label: 'Delais', icon: '⏱️' },
     { id: 'alerts', label: 'Alertes', icon: '🚨', badge: alertsLeads.total + alertsDeals.total },
-    { id: 'qualite', label: 'Qualité', icon: '🔍', badge: qualityStats.dealsWithoutLead.won + qualityStats.dealsWithoutLead.inProgress + qualityStats.dealsWithoutActivity.length + qualityStats.leadsWithoutActivity.length }
+    { id: 'qualite', label: 'Qualité', icon: '🔍', badge: qualityStats.dealsWithoutLead.won + qualityStats.dealsWithoutLead.inProgress + qualityStats.dealsWithoutActivity.length + qualityStats.leadsWithoutActivity.length },
+    { id: 'allocation', label: 'Allocation', icon: '🎯' }
   ];
 
   if (loading) {
@@ -2140,6 +2344,199 @@ DOCTOUR Analytics`);
               ) : (
                 <p className="text-slate-500 text-center py-4">Aucun client avec plusieurs interventions Won pour l'instant</p>
               )}
+            </Card>
+          </div>
+        )}
+
+        {/* Onglet Allocation */}
+        {activeTab === 'allocation' && (
+          <div className="space-y-4">
+            {/* KPIs Budget */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <KpiCard icon="👥" label="Commerciaux actifs" value={allocationStats.commerciaux.length} subtext={`${allocationStats.repartition.prioritaire.length} prioritaires`} color="blue" />
+              <KpiCard icon="📩" label="Leads/semaine recommandés" value={allocationStats.totalLeadsParSemaine} subtext={`CPL: ${allocationStats.cpl}€`} color="green" />
+              <KpiCard icon="💶" label="Budget hebdo" value={formatCurrency(allocationStats.budgetHebdo)} subtext="Recommandé" color="cyan" />
+              <KpiCard icon="📅" label="Budget mensuel" value={formatCurrency(allocationStats.budgetMensuel)} subtext="Projection" color="purple" />
+            </div>
+
+            {/* Répartition par statut */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-2xl">🟢</span>
+                  <span className="font-bold text-emerald-400">Prioritaire</span>
+                </div>
+                <p className="text-2xl font-bold text-white">{allocationStats.repartition.prioritaire.length}</p>
+                <p className="text-sm text-slate-400">15-20 leads/sem chacun</p>
+              </div>
+              <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-2xl">🔵</span>
+                  <span className="font-bold text-blue-400">Normal</span>
+                </div>
+                <p className="text-2xl font-bold text-white">{allocationStats.repartition.normal.length}</p>
+                <p className="text-sm text-slate-400">8-12 leads/sem chacun</p>
+              </div>
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-2xl">🟡</span>
+                  <span className="font-bold text-amber-400">Limité</span>
+                </div>
+                <p className="text-2xl font-bold text-white">{allocationStats.repartition.limite.length}</p>
+                <p className="text-sm text-slate-400">3-5 leads/sem chacun</p>
+              </div>
+              <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-2xl">🔴</span>
+                  <span className="font-bold text-red-400">Stop</span>
+                </div>
+                <p className="text-2xl font-bold text-white">{allocationStats.repartition.stop.length}</p>
+                <p className="text-sm text-slate-400">0 lead jusqu'à amélioration</p>
+              </div>
+            </div>
+
+            {/* Tableau principal des scores */}
+            <Card title="🎯 Score de productivité par commercial" icon="📊">
+              <p className="text-slate-400 text-sm mb-4">Analyse sur {allocationStats.periode} • Score max: 100 pts • Objectif closing: 15%</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700 text-slate-400">
+                      <th className="p-2 text-left">Commercial</th>
+                      <th className="p-2 text-center" title="Score total sur 100">Score</th>
+                      <th className="p-2 text-center" title="Closing (35pts) - Objectif 15%">Closing</th>
+                      <th className="p-2 text-center" title="Réactivité (25pts) - Délai 1er contact">Réact.</th>
+                      <th className="p-2 text-center" title="Saturation (20pts) - % leads en retard">Satur.</th>
+                      <th className="p-2 text-center" title="Gaspillage (15pts) - % jamais contactés">Gasp.</th>
+                      <th className="p-2 text-center" title="Volume (5pts) - Fiches/jour">Vol.</th>
+                      <th className="p-2 text-center">Capacité</th>
+                      <th className="p-2 text-center">Recommandation</th>
+                      <th className="p-2 text-center">Leads/sem</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allocationStats.commerciaux.map(c => (
+                      <tr key={c.id} className={`border-b border-slate-800 ${c.recommandation === 'stop' ? 'bg-red-500/5' : c.recommandation === 'prioritaire' ? 'bg-emerald-500/5' : ''}`}>
+                        <td className="p-2 font-medium">{c.name}</td>
+                        <td className="p-2 text-center">
+                          <span className={`font-bold text-lg ${c.scoreTotal >= 70 ? 'text-emerald-400' : c.scoreTotal >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
+                            {c.scoreTotal}
+                          </span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className="text-xs">{c.scoreClosing}/35</span>
+                          <br/><span className="text-slate-500 text-xs">{c.txClosing}%</span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className="text-xs">{c.scoreReactivite}/25</span>
+                          <br/><span className="text-slate-500 text-xs">{c.avgDelaiContact !== null ? `${c.avgDelaiContact}j` : '-'}</span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className="text-xs">{c.scoreSaturation}/20</span>
+                          <br/><span className="text-slate-500 text-xs">{c.pctRetard}% retard</span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className="text-xs">{c.scoreGaspillage}/15</span>
+                          <br/><span className="text-slate-500 text-xs">{c.pctJamaisContactes}% vide</span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className="text-xs">{c.scoreVolume}/5</span>
+                          <br/><span className="text-slate-500 text-xs">{c.fichesParJour}/j</span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <Badge color={c.capacite >= 5 ? 'green' : c.capacite >= 2 ? 'yellow' : 'red'} size="xs">
+                            {c.capacite}
+                          </Badge>
+                        </td>
+                        <td className="p-2 text-center">
+                          <Badge color={c.couleur} size="sm">
+                            {c.recommandation === 'prioritaire' ? '🟢 Prioritaire' : 
+                             c.recommandation === 'normal' ? '🔵 Normal' : 
+                             c.recommandation === 'limite' ? '🟡 Limité' : '🔴 Stop'}
+                          </Badge>
+                        </td>
+                        <td className="p-2 text-center font-bold text-lg">
+                          {c.leadsParSemaine > 0 ? c.leadsParSemaine : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+
+            {/* Détails métriques brutes */}
+            <Card title="📈 Métriques détaillées" icon="🔍">
+              <p className="text-slate-400 text-sm mb-4">Données brutes des 60 derniers jours</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700 text-slate-400">
+                      <th className="p-2 text-left">Commercial</th>
+                      <th className="p-2 text-right">Leads reçus</th>
+                      <th className="p-2 text-right">Convertis</th>
+                      <th className="p-2 text-right">Ventes</th>
+                      <th className="p-2 text-right">Tx Closing</th>
+                      <th className="p-2 text-right">En cours</th>
+                      <th className="p-2 text-right">En retard</th>
+                      <th className="p-2 text-right">Jamais contactés</th>
+                      <th className="p-2 text-right">Fiches/jour</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allocationStats.commerciaux.map(c => (
+                      <tr key={c.id} className="border-b border-slate-800">
+                        <td className="p-2 font-medium">{c.name}</td>
+                        <td className="p-2 text-right">{c.leadsRecus}</td>
+                        <td className="p-2 text-right">{c.converted}</td>
+                        <td className="p-2 text-right text-emerald-400">{c.ventes}</td>
+                        <td className="p-2 text-right">
+                          <Badge color={c.txClosing >= 15 ? 'green' : c.txClosing >= 10 ? 'yellow' : 'red'} size="xs">
+                            {c.txClosing}%
+                          </Badge>
+                        </td>
+                        <td className="p-2 text-right">{c.leadsEnCours}</td>
+                        <td className="p-2 text-right">
+                          <span className={c.leadsEnRetard > 5 ? 'text-red-400' : c.leadsEnRetard > 2 ? 'text-amber-400' : 'text-emerald-400'}>
+                            {c.leadsEnRetard}
+                          </span>
+                        </td>
+                        <td className="p-2 text-right">
+                          <span className={c.leadsJamaisContactes > 3 ? 'text-red-400' : 'text-slate-400'}>
+                            {c.leadsJamaisContactes}
+                          </span>
+                        </td>
+                        <td className="p-2 text-right">{c.fichesParJour}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+
+            {/* Légende */}
+            <Card title="📚 Comment lire ce tableau" icon="ℹ️">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 text-sm">
+                <div>
+                  <h4 className="font-bold text-white mb-2">Composantes du score (100 pts max)</h4>
+                  <ul className="space-y-1 text-slate-400">
+                    <li><span className="text-cyan-400 font-mono">Closing (35 pts)</span> : Taux de closing vs objectif 15%</li>
+                    <li><span className="text-cyan-400 font-mono">Réactivité (25 pts)</span> : Délai moyen avant 1er contact</li>
+                    <li><span className="text-cyan-400 font-mono">Saturation (20 pts)</span> : % de leads en retard (&gt;3j)</li>
+                    <li><span className="text-cyan-400 font-mono">Gaspillage (15 pts)</span> : % de leads jamais contactés</li>
+                    <li><span className="text-cyan-400 font-mono">Volume (5 pts)</span> : Nombre de fiches touchées/jour</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4 className="font-bold text-white mb-2">Recommandations</h4>
+                  <ul className="space-y-1 text-slate-400">
+                    <li><span className="text-emerald-400">🟢 Prioritaire</span> : Score ≥70 + Capacité ≥5 → 15-20 leads/sem</li>
+                    <li><span className="text-blue-400">🔵 Normal</span> : Score ≥60 + Capacité ≥3 → 8-12 leads/sem</li>
+                    <li><span className="text-amber-400">🟡 Limité</span> : Score ≥50 + Capacité ≥2 → 3-5 leads/sem</li>
+                    <li><span className="text-red-400">🔴 Stop</span> : Score &lt;50 ou Capacité &lt;2 → 0 lead</li>
+                  </ul>
+                </div>
+              </div>
             </Card>
           </div>
         )}
