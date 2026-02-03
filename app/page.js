@@ -820,19 +820,22 @@ export default function Dashboard() {
       movedTime: d.MOVED_TIME,
       daysInStage: getDaysInStage(d),
       commercial: getUserName(d.ASSIGNED_BY_ID),
-      commercialId: d.ASSIGNED_BY_ID
+      commercialId: d.ASSIGNED_BY_ID,
+      hasReminder: dealsWithPendingReminder.has(d.ID)
     });
     
     const devisSigneList = devisSigne.map(mapDeal).sort((a, b) => b.daysSinceContact - a.daysSinceContact);
     const avanceRecuList = avanceRecu.map(mapDeal).sort((a, b) => b.daysInStage - a.daysInStage);
     const billetRecuList = billetRecu.map(mapDeal).sort((a, b) => b.daysSinceContact - a.daysSinceContact);
     
-    // Devis signés en danger (>7j sans contact)
-    const devisEnDanger = devisSigneList.filter(d => d.daysSinceContact > 7);
+    // Devis signés en danger (>7j sans contact ET pas de relance planifiée)
+    const devisEnDanger = devisSigneList.filter(d => d.daysSinceContact > 7 && !d.hasReminder);
+    const devisAvecRelance = devisSigneList.filter(d => d.daysSinceContact > 7 && d.hasReminder);
     const caDevisEnDanger = devisEnDanger.reduce((sum, d) => sum + d.opportunity, 0);
     
-    // Avances anciennes (>30j en étape)
-    const avancesAnciennes = avanceRecuList.filter(d => d.daysInStage > 30);
+    // Avances anciennes (>30j en étape ET pas de relance planifiée)
+    const avancesAnciennes = avanceRecuList.filter(d => d.daysInStage > 30 && !d.hasReminder);
+    const avancesAvecRelance = avanceRecuList.filter(d => d.daysInStage > 30 && d.hasReminder);
     const caAvancesAnciennes = avancesAnciennes.reduce((sum, d) => sum + d.opportunity, 0);
     
     // CA total des deals chauds
@@ -855,7 +858,7 @@ export default function Dashboard() {
       }
       if (d.stageId && d.stageId.includes('PREPAYMENT_INVOICE')) {
         byCommercial[d.commercialId].devisSigne++;
-        if (d.daysSinceContact > 7) byCommercial[d.commercialId].enDanger++;
+        if (d.daysSinceContact > 7 && !d.hasReminder) byCommercial[d.commercialId].enDanger++;
       } else if (d.stageId && d.stageId.includes('FINAL_INVOICE')) {
         byCommercial[d.commercialId].avanceRecu++;
       } else if (d.stageId && d.stageId.includes('EXECUTING')) {
@@ -868,6 +871,7 @@ export default function Dashboard() {
       devisSigne: {
         total: devisSigneList.length,
         enDanger: devisEnDanger.length,
+        avecRelance: devisAvecRelance.length,
         ca: caDevisSigne,
         caEnDanger: caDevisEnDanger,
         list: devisSigneList
@@ -875,6 +879,7 @@ export default function Dashboard() {
       avanceRecu: {
         total: avanceRecuList.length,
         anciennes: avancesAnciennes.length,
+        avecRelance: avancesAvecRelance.length,
         ca: caAvanceRecu,
         caAnciennes: caAvancesAnciennes,
         list: avanceRecuList
@@ -888,11 +893,12 @@ export default function Dashboard() {
         deals: devisSigneList.length + avanceRecuList.length + billetRecuList.length,
         ca: caDevisSigne + caAvanceRecu + caBilletRecu,
         enDanger: devisEnDanger.length + avancesAnciennes.length,
-        caEnDanger: caDevisEnDanger + caAvancesAnciennes
+        caEnDanger: caDevisEnDanger + caAvancesAnciennes,
+        avecRelance: devisAvecRelance.length + avancesAvecRelance.length
       },
       byCommercial
     };
-  }, [rawDeals, rawActivities, getUserName]);
+  }, [rawDeals, rawActivities, dealsWithPendingReminder, getUserName]);
 
   // ====== STATS DU JOUR (AUJOURD'HUI) ======
   const dailyStats = useMemo(() => {
@@ -1407,7 +1413,10 @@ DOCTOUR Analytics`);
                   <span className="text-3xl">⚠️</span>
                   <div>
                     <p className="text-red-400 font-bold text-lg">CA en danger : {formatCurrency(hotDealsStats.totals.caEnDanger)}</p>
-                    <p className="text-slate-400 text-sm">{hotDealsStats.devisSigne.enDanger} devis signés sans contact &gt;7j + {hotDealsStats.avanceRecu.anciennes} avances &gt;30j en étape</p>
+                    <p className="text-slate-400 text-sm">
+                      {hotDealsStats.devisSigne.enDanger} devis signés sans contact &gt;7j + {hotDealsStats.avanceRecu.anciennes} avances &gt;30j en étape
+                      {hotDealsStats.totals.avecRelance > 0 && <span className="text-emerald-400"> • {hotDealsStats.totals.avecRelance} exclus (relance planifiée)</span>}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -1416,7 +1425,10 @@ DOCTOUR Analytics`);
             {/* Devis Signés en danger */}
             {hotDealsStats.devisSigne.enDanger > 0 && (
               <Card title="🚨 Devis Signés en danger (>7j sans contact)" icon="📝">
-                <p className="text-red-400 text-sm mb-3">Ces patients ont signé mais n'ont pas été recontactés depuis plus de 7 jours - risque de perte !</p>
+                <p className="text-red-400 text-sm mb-3">
+                  Ces patients ont signé mais n'ont pas été recontactés depuis plus de 7 jours - risque de perte !
+                  {hotDealsStats.devisSigne.avecRelance > 0 && <span className="text-emerald-400 ml-2">({hotDealsStats.devisSigne.avecRelance} exclus car relance planifiée)</span>}
+                </p>
                 <div className="overflow-x-auto max-h-64">
                   <table className="w-full text-sm">
                     <thead>
@@ -1429,7 +1441,7 @@ DOCTOUR Analytics`);
                       </tr>
                     </thead>
                     <tbody>
-                      {hotDealsStats.devisSigne.list.filter(d => d.daysSinceContact > 7).map(d => (
+                      {hotDealsStats.devisSigne.list.filter(d => d.daysSinceContact > 7 && !d.hasReminder).map(d => (
                         <tr key={d.id} className="border-b border-slate-800 bg-red-500/10">
                           <td className="p-2 font-mono text-xs">{d.id}</td>
                           <td className="p-2 font-medium max-w-[200px] truncate">{d.title}</td>
@@ -1461,11 +1473,11 @@ DOCTOUR Analytics`);
                   </thead>
                   <tbody>
                     {hotDealsStats.devisSigne.list.map(d => (
-                      <tr key={d.id} className={`border-b border-slate-800 ${d.daysSinceContact > 7 ? 'bg-red-500/10' : d.daysSinceContact > 3 ? 'bg-yellow-500/10' : ''}`}>
+                      <tr key={d.id} className={`border-b border-slate-800 ${d.daysSinceContact > 7 && !d.hasReminder ? 'bg-red-500/10' : d.hasReminder ? 'bg-emerald-500/5' : d.daysSinceContact > 3 ? 'bg-yellow-500/10' : ''}`}>
                         <td className="p-2 font-mono text-xs">{d.id}</td>
-                        <td className="p-2 font-medium max-w-[200px] truncate">{d.title}</td>
+                        <td className="p-2 font-medium max-w-[200px] truncate">{d.title} {d.hasReminder && <span title="Relance planifiée">📅</span>}</td>
                         <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(d.opportunity)}</td>
-                        <td className="p-2 text-right"><Badge color={d.daysSinceContact > 7 ? 'red' : d.daysSinceContact > 3 ? 'yellow' : 'green'} size="xs">{d.daysSinceContact}j</Badge></td>
+                        <td className="p-2 text-right"><Badge color={d.hasReminder ? 'green' : d.daysSinceContact > 7 ? 'red' : d.daysSinceContact > 3 ? 'yellow' : 'green'} size="xs">{d.daysSinceContact}j</Badge></td>
                         <td className="p-2 text-slate-400 text-xs">{formatDate(d.lastContact)}</td>
                         <td className="p-2">{d.commercial}</td>
                       </tr>
@@ -1477,7 +1489,10 @@ DOCTOUR Analytics`);
 
             {/* Avances Reçues */}
             <Card title="💰 Avances Reçues - Suivi" icon="📋">
-              <p className="text-slate-400 text-sm mb-3">{hotDealsStats.avanceRecu.total} patients ayant versé une avance - triés par ancienneté</p>
+              <p className="text-slate-400 text-sm mb-3">
+                {hotDealsStats.avanceRecu.total} patients ayant versé une avance - triés par ancienneté
+                {hotDealsStats.avanceRecu.avecRelance > 0 && <span className="text-emerald-400 ml-2">({hotDealsStats.avanceRecu.avecRelance} avec relance planifiée)</span>}
+              </p>
               <div className="overflow-x-auto max-h-96">
                 <table className="w-full text-sm">
                   <thead>
@@ -1493,9 +1508,9 @@ DOCTOUR Analytics`);
                   </thead>
                   <tbody>
                     {hotDealsStats.avanceRecu.list.map(d => (
-                      <tr key={d.id} className={`border-b border-slate-800 ${d.daysInStage > 90 ? 'bg-red-500/10' : d.daysInStage > 30 ? 'bg-orange-500/10' : ''}`}>
+                      <tr key={d.id} className={`border-b border-slate-800 ${d.daysInStage > 90 && !d.hasReminder ? 'bg-red-500/10' : d.hasReminder ? 'bg-emerald-500/5' : d.daysInStage > 30 ? 'bg-orange-500/10' : ''}`}>
                         <td className="p-2 font-mono text-xs">{d.id}</td>
-                        <td className="p-2 font-medium max-w-[200px] truncate">{d.title}</td>
+                        <td className="p-2 font-medium max-w-[200px] truncate">{d.title} {d.hasReminder && <span title="Relance planifiée">📅</span>}</td>
                         <td className="p-2 text-right font-mono text-cyan-400">{formatCurrency(d.opportunity)}</td>
                         <td className="p-2 text-right"><Badge color={d.daysInStage > 90 ? 'red' : d.daysInStage > 30 ? 'orange' : 'green'} size="xs">{d.daysInStage}j</Badge></td>
                         <td className="p-2 text-right"><Badge color={d.daysSinceContact > 14 ? 'red' : d.daysSinceContact > 7 ? 'yellow' : 'green'} size="xs">{d.daysSinceContact}j</Badge></td>
