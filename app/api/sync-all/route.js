@@ -101,11 +101,36 @@ export async function GET(request) {
           updated_at: new Date().toISOString()
         };
       }
+    },
+    // ========== NOUVEAU: QUOTES ==========
+    quotes: {
+      endpoint: 'crm.quote.list',
+      fields: [
+        'ID', 'TITLE', 'STATUS_ID', 'ASSIGNED_BY_ID',
+        'DATE_CREATE', 'DATE_MODIFY', 'CLOSEDATE',
+        'OPPORTUNITY', 'CURRENCY_ID', 'DEAL_ID', 'LEAD_ID'
+      ],
+      transform: (q) => ({
+        id: q.ID,
+        title: q.TITLE || null,
+        status_id: q.STATUS_ID || null,
+        assigned_by_id: q.ASSIGNED_BY_ID || null,
+        date_create: cleanDate(q.DATE_CREATE),
+        date_modify: cleanDate(q.DATE_MODIFY),
+        closedate: cleanDate(q.CLOSEDATE),
+        opportunity: q.OPPORTUNITY ? parseFloat(q.OPPORTUNITY) : null,
+        currency_id: q.CURRENCY_ID || 'EUR',
+        deal_id: q.DEAL_ID || null,
+        lead_id: q.LEAD_ID || null,
+        // NOUVELLE COLONNE
+        opportunity_eur: toEUR(q.OPPORTUNITY, q.CURRENCY_ID),
+        updated_at: new Date().toISOString()
+      })
     }
   };
 
   const cfg = config[table];
-  if (!cfg) return Response.json({ error: 'Table invalide' }, { status: 400 });
+  if (!cfg) return Response.json({ error: 'Table invalide. Utilisez: leads, deals, quotes' }, { status: 400 });
 
   try {
     const allData = [];
