@@ -621,8 +621,12 @@ export default function Dashboard() {
 
   // ====== QUALITÉ DES DONNÉES ======
   const qualityStats = useMemo(() => {
+    // === QUALITÉ: Toujours utiliser TOUTES les données (pas filtrées par période) ===
+    // Exclure seulement les pipelines C1/C5
+    const allDealsForQuality = rawDeals.filter(d => !d.STAGE_ID || (!d.STAGE_ID.startsWith('C1:') && !d.STAGE_ID.startsWith('C5:')));
+    
     // Deals sans lead (orphelins)
-    const dealsWithoutLead = filteredDeals.filter(d => 
+    const dealsWithoutLead = allDealsForQuality.filter(d => 
       !d.LEAD_ID || d.LEAD_ID === '' || d.LEAD_ID === '0'
     );
     
@@ -651,9 +655,17 @@ export default function Dashboard() {
       });
     });
     
-    // === NOUVEAU: Deals sans aucune activité (jamais contactés) ===
-    const dealsWithoutActivity = filteredDeals.filter(d => 
-      !d.LAST_ACTIVITY_TIME && 
+    // === Créer des Sets des IDs qui ont au moins une activité ===
+    const dealsWithActivity = new Set();
+    const leadsWithActivity = new Set();
+    rawActivities.forEach(a => {
+      if (a.OWNER_TYPE_ID === '2') dealsWithActivity.add(a.OWNER_ID);
+      if (a.OWNER_TYPE_ID === '1') leadsWithActivity.add(a.OWNER_ID);
+    });
+    
+    // === Deals sans aucune activité (jamais contactés) ===
+    const dealsWithoutActivity = allDealsForQuality.filter(d => 
+      !dealsWithActivity.has(d.ID) && 
       d.STAGE_ID && 
       !d.STAGE_ID.includes('WON') && 
       !d.STAGE_ID.includes('LOSE') && 
@@ -669,9 +681,9 @@ export default function Dashboard() {
       commercial: getUserName(d.ASSIGNED_BY_ID)
     })).sort((a, b) => b.daysOld - a.daysOld);
     
-    // === NOUVEAU: Leads sans aucune activité (jamais contactés) ===
-    const leadsWithoutActivity = filteredLeads.filter(l => 
-      !l.LAST_ACTIVITY_TIME && 
+    // === Leads sans aucune activité (jamais contactés) ===
+    const leadsWithoutActivity = rawLeads.filter(l => 
+      !leadsWithActivity.has(l.ID) && 
       l.STATUS_ID && 
       l.STATUS_ID !== 'CONVERTED' && 
       l.STATUS_ID !== 'JUNK'
@@ -718,9 +730,9 @@ export default function Dashboard() {
       commercialId: d.ASSIGNED_BY_ID
     })).sort((a, b) => b.daysOld - a.daysOld);
     
-    // Clients fidèles (leads avec plusieurs deals Won)
+    // Clients fidèles (leads avec plusieurs deals Won) - TOUTES les données
     const leadDealsCount = {};
-    filteredDeals.forEach(d => {
+    allDealsForQuality.forEach(d => {
       if (d.LEAD_ID && d.LEAD_ID !== '' && d.LEAD_ID !== '0' && d.STAGE_ID && d.STAGE_ID.includes('WON')) {
         if (!leadDealsCount[d.LEAD_ID]) leadDealsCount[d.LEAD_ID] = { count: 0, totalCA: 0, deals: [] };
         leadDealsCount[d.LEAD_ID].count++;
@@ -793,7 +805,7 @@ export default function Dashboard() {
       dealsOrphelins,
       loyalClients
     };
-  }, [filteredDeals, filteredLeads, rawLeads, getUserName]);
+  }, [rawDeals, rawLeads, rawUsers, rawActivities, getUserName]);
 
   // ====== DEALS CHAUDS (Avance Reçu + Devis Signé) ======
   const hotDealsStats = useMemo(() => {
