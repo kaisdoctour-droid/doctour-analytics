@@ -664,9 +664,20 @@ export default function Dashboard() {
       if (a.OWNER_TYPE_ID === '1') leadsWithActivity.add(String(a.OWNER_ID));
     });
     
+    // === Helper: vérifier si une fiche a été travaillée ===
+    const hasBeenWorkedDeal = (d) => {
+      if (dealsWithActivity.has(String(d.ID))) return true;
+      if (d.DATE_MODIFY && d.DATE_CREATE) {
+        const dateModify = new Date(d.DATE_MODIFY).getTime();
+        const dateCreate = new Date(d.DATE_CREATE).getTime();
+        if (dateModify - dateCreate > 60000) return true;
+      }
+      return false;
+    };
+    
     // === Deals sans aucune activité (jamais contactés) ===
     const dealsWithoutActivity = allDealsForQuality.filter(d => 
-      !dealsWithActivity.has(String(d.ID)) && 
+      !hasBeenWorkedDeal(d) && 
       d.STAGE_ID && 
       !d.STAGE_ID.includes('WON') && 
       !d.STAGE_ID.includes('LOSE') && 
@@ -683,8 +694,22 @@ export default function Dashboard() {
     })).sort((a, b) => b.daysOld - a.daysOld);
     
     // === Leads sans aucune activité (jamais contactés) ===
+    // Fallback: si DATE_MODIFY > DATE_CREATE (lead modifié), on considère qu'il a été travaillé
+    const hasBeenWorkedLead = (l) => {
+      // Si activité existe → travaillé
+      if (leadsWithActivity.has(String(l.ID))) return true;
+      // Si DATE_MODIFY existe et différente de DATE_CREATE → travaillé
+      if (l.DATE_MODIFY && l.DATE_CREATE) {
+        const dateModify = new Date(l.DATE_MODIFY).getTime();
+        const dateCreate = new Date(l.DATE_CREATE).getTime();
+        // Tolérance de 1 minute pour éviter les faux positifs
+        if (dateModify - dateCreate > 60000) return true;
+      }
+      return false;
+    };
+    
     const leadsWithoutActivity = rawLeads.filter(l => 
-      !leadsWithActivity.has(String(l.ID)) && 
+      !hasBeenWorkedLead(l) && 
       l.STATUS_ID && 
       l.STATUS_ID !== 'CONVERTED' && 
       l.STATUS_ID !== 'JUNK'
