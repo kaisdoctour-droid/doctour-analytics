@@ -656,16 +656,17 @@ export default function Dashboard() {
     });
     
     // === Créer des Sets des IDs qui ont au moins une activité ===
+    // IMPORTANT: Normaliser en String pour éviter les problèmes de comparaison
     const dealsWithActivity = new Set();
     const leadsWithActivity = new Set();
     rawActivities.forEach(a => {
-      if (a.OWNER_TYPE_ID === '2') dealsWithActivity.add(a.OWNER_ID);
-      if (a.OWNER_TYPE_ID === '1') leadsWithActivity.add(a.OWNER_ID);
+      if (a.OWNER_TYPE_ID === '2') dealsWithActivity.add(String(a.OWNER_ID));
+      if (a.OWNER_TYPE_ID === '1') leadsWithActivity.add(String(a.OWNER_ID));
     });
     
     // === Deals sans aucune activité (jamais contactés) ===
     const dealsWithoutActivity = allDealsForQuality.filter(d => 
-      !dealsWithActivity.has(d.ID) && 
+      !dealsWithActivity.has(String(d.ID)) && 
       d.STAGE_ID && 
       !d.STAGE_ID.includes('WON') && 
       !d.STAGE_ID.includes('LOSE') && 
@@ -683,7 +684,7 @@ export default function Dashboard() {
     
     // === Leads sans aucune activité (jamais contactés) ===
     const leadsWithoutActivity = rawLeads.filter(l => 
-      !leadsWithActivity.has(l.ID) && 
+      !leadsWithActivity.has(String(l.ID)) && 
       l.STATUS_ID && 
       l.STATUS_ID !== 'CONVERTED' && 
       l.STATUS_ID !== 'JUNK'
