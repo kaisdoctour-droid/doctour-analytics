@@ -22,6 +22,11 @@ export default function Dashboard() {
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState('');
   
+  // ========== NOUVEAUX ÉTATS POUR SYNC SÉPARÉE ==========
+  const [syncingRapide, setSyncingRapide] = useState(false);
+  const [syncingActivites, setSyncingActivites] = useState(false);
+  const [syncingDevis, setSyncingDevis] = useState(false);
+  
   // Options pour les alertes
   const [excludeWithReminder, setExcludeWithReminder] = useState(true);
   const [delaiRetard, setDelaiRetard] = useState(3); // Jours avant retard
@@ -81,7 +86,166 @@ export default function Dashboard() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Fonction de sync automatique complète
+  // Helper pour savoir si une sync est en cours
+  const isAnySyncRunning = syncingRapide || syncingActivites || syncingDevis || syncing;
+
+  // ========== SYNC RAPIDE: Users + Sources + Leads + Deals ==========
+  const syncRapide = async () => {
+    if (isAnySyncRunning) return;
+    setSyncingRapide(true);
+    setSyncProgress('🔄 Sync rapide: initialisation...');
+    
+    try {
+      // 1. Sync users & sources
+      setSyncProgress('🔄 Sync utilisateurs et sources...');
+      await fetch('/api/sync');
+      
+      // 2. Sync ALL leads avec pagination automatique
+      setSyncProgress('🔄 Sync leads...');
+      let leadsStart = 0;
+      let leadsTotal = 0;
+      let hasMoreLeads = true;
+      
+      while (hasMoreLeads) {
+        setSyncProgress(`🔄 Sync leads... ${leadsTotal} importés`);
+        const res = await fetch(`/api/sync-all?table=leads&start=${leadsStart}`);
+        const data = await res.json();
+        
+        if (!data.success) {
+          console.error('Erreur sync leads:', data.error);
+          break;
+        }
+        
+        leadsTotal = data.totalSynced;
+        hasMoreLeads = data.hasMore;
+        leadsStart = data.nextStart || 0;
+        
+        if (!hasMoreLeads) break;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      
+      // 3. Sync ALL deals avec pagination automatique
+      setSyncProgress(`🔄 Leads OK (${leadsTotal}). Sync deals...`);
+      let dealsStart = 0;
+      let dealsTotal = 0;
+      let hasMoreDeals = true;
+      
+      while (hasMoreDeals) {
+        setSyncProgress(`🔄 Sync deals... ${dealsTotal} importés`);
+        const res = await fetch(`/api/sync-all?table=deals&start=${dealsStart}`);
+        const data = await res.json();
+        
+        if (!data.success) {
+          console.error('Erreur sync deals:', data.error);
+          break;
+        }
+        
+        dealsTotal = data.totalSynced;
+        hasMoreDeals = data.hasMore;
+        dealsStart = data.nextStart || 0;
+        
+        if (!hasMoreDeals) break;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      
+      setSyncProgress(`✅ Sync rapide terminée! ${leadsTotal} leads, ${dealsTotal} deals`);
+      
+      // Recharger les données
+      await loadData();
+      
+    } catch (err) {
+      setSyncProgress(`❌ Erreur: ${err.message}`);
+    } finally {
+      setSyncingRapide(false);
+      setTimeout(() => setSyncProgress(''), 5000);
+    }
+  };
+
+  // ========== SYNC ACTIVITÉS UNIQUEMENT ==========
+  const syncActivites = async () => {
+    if (isAnySyncRunning) return;
+    setSyncingActivites(true);
+    setSyncProgress('📞 Sync activités (peut prendre 20-30 min)...');
+    
+    try {
+      let activitiesStart = 0;
+      let activitiesTotal = 0;
+      let hasMoreActivities = true;
+      
+      while (hasMoreActivities) {
+        setSyncProgress(`📞 Sync activités... ${activitiesTotal} importées`);
+        const res = await fetch(`/api/sync/activities?start=${activitiesStart}`);
+        const data = await res.json();
+        
+        if (!data.success) {
+          console.error('Erreur sync activities:', data.error);
+          break;
+        }
+        
+        activitiesTotal = data.totalSynced;
+        hasMoreActivities = data.hasMore;
+        activitiesStart = data.nextStart || 0;
+        
+        if (!hasMoreActivities) break;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      
+      setSyncProgress(`✅ Activités terminées! ${activitiesTotal} activités`);
+      
+      // Recharger les données
+      await loadData();
+      
+    } catch (err) {
+      setSyncProgress(`❌ Erreur: ${err.message}`);
+    } finally {
+      setSyncingActivites(false);
+      setTimeout(() => setSyncProgress(''), 5000);
+    }
+  };
+
+  // ========== SYNC DEVIS UNIQUEMENT ==========
+  const syncDevis = async () => {
+    if (isAnySyncRunning) return;
+    setSyncingDevis(true);
+    setSyncProgress('📝 Sync devis...');
+    
+    try {
+      let quotesStart = 0;
+      let quotesTotal = 0;
+      let hasMoreQuotes = true;
+      
+      while (hasMoreQuotes) {
+        setSyncProgress(`📝 Sync devis... ${quotesTotal} importés`);
+        const res = await fetch(`/api/sync-all?table=quotes&start=${quotesStart}`);
+        const data = await res.json();
+        
+        if (!data.success) {
+          console.error('Erreur sync quotes:', data.error);
+          break;
+        }
+        
+        quotesTotal = data.totalSynced;
+        hasMoreQuotes = data.hasMore;
+        quotesStart = data.nextStart || 0;
+        
+        if (!hasMoreQuotes) break;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      
+      setSyncProgress(`✅ Devis terminés! ${quotesTotal} devis`);
+      
+      // Recharger les données
+      await loadData();
+      
+    } catch (err) {
+      setSyncProgress(`❌ Erreur: ${err.message}`);
+    } finally {
+      setSyncingDevis(false);
+      setTimeout(() => setSyncProgress(''), 5000);
+    }
+  };
+
+  // Fonction de sync automatique complète (conservée pour compatibilité)
   const syncAllData = async () => {
     setSyncing(true);
     setSyncProgress('Initialisation...');
@@ -1547,22 +1711,31 @@ DOCTOUR Analytics`);
             <DateRangePicker presets={PERIOD_PRESETS} selectedPreset={selectedPeriod} onPresetChange={setSelectedPeriod} startDate={customStartDate} endDate={customEndDate} onStartChange={setCustomStartDate} onEndChange={setCustomEndDate} />
             <CommercialSelect commercials={commercialsList} selected={selectedCommercials} onChange={setSelectedCommercials} />
             <Button onClick={exportCSV} variant="secondary" size="sm">📥 CSV</Button>
-            <Button onClick={syncAllData} disabled={syncing} variant="success" size="sm">
-              {syncing ? '⏳' : '🔄'} Sync
+            <Button onClick={syncRapide} disabled={isAnySyncRunning} variant="success" size="sm" title="Sync Users + Sources + Leads + Deals (~2-3 min)">
+              {syncingRapide ? '⏳' : '🔄'} Rapide
+            </Button>
+            <Button onClick={syncActivites} disabled={isAnySyncRunning} variant="secondary" size="sm" title="Sync Activités uniquement (~20-30 min)">
+              {syncingActivites ? '⏳' : '📞'} Activités
+            </Button>
+            <Button onClick={syncDevis} disabled={isAnySyncRunning} variant="secondary" size="sm" title="Sync Devis uniquement (~2-3 min)">
+              {syncingDevis ? '⏳' : '📝'} Devis
             </Button>
           </div>
         </div>
 
-        {syncing && (
+        {isAnySyncRunning && (
           <div className="bg-blue-500/20 border border-blue-500/50 rounded-lg p-3 text-blue-300 text-sm">
             ⏳ {syncProgress}
           </div>
         )}
 
-        {rawLeads.length === 0 && !syncing && (
+        {rawLeads.length === 0 && !isAnySyncRunning && (
           <div className="bg-amber-500/20 border border-amber-500/50 rounded-lg p-4 text-center">
             <p className="text-amber-300 mb-2">Base de données vide</p>
-            <Button onClick={syncAllData} variant="success">🔄 Synchroniser TOUT depuis Bitrix24</Button>
+            <div className="flex gap-2 justify-center">
+              <Button onClick={syncRapide} variant="success">🔄 Sync Rapide (Leads + Deals)</Button>
+              <Button onClick={syncActivites} variant="secondary">📞 Sync Activités</Button>
+            </div>
           </div>
         )}
 
