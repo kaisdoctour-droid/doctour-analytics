@@ -9,8 +9,8 @@ const cleanDate = (d) => (d && d !== '' ? d : null);
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const startFrom = parseInt(searchParams.get('start') || '0');
-  // Par défaut: récupère TOUTES les activités (complétées et non complétées)
-  // Utiliser ?pending=true pour ne récupérer que les non complétées
+  // CHANGEMENT: Par défaut, récupérer TOUTES les activités (pending=false)
+  // Pour ne récupérer que les pending, passer ?pending=true
   const onlyPending = searchParams.get('pending') === 'true';
   
   const BITRIX_URL = process.env.BITRIX_API_URL;
@@ -29,10 +29,8 @@ export async function GET(request) {
       url += `&select[]=CREATED&select[]=LAST_UPDATED&select[]=DEADLINE`;
       url += `&select[]=START_TIME&select[]=END_TIME&select[]=DIRECTION`;
       
-      // Filtre optionnel sur les activités non complétées
+      // Seulement filtrer sur COMPLETED si onlyPending est true
       if (onlyPending) url += `&filter[COMPLETED]=N`;
-      
-      // Filtre sur les types d'entités (leads et deals uniquement)
       url += `&filter[OWNER_TYPE_ID][0]=1&filter[OWNER_TYPE_ID][1]=2`;
       
       const response = await fetch(url);
@@ -86,11 +84,11 @@ export async function GET(request) {
 
     return Response.json({
       success: true,
-      message: onlyPending ? 'Sync activités non complétées uniquement' : 'Sync TOUTES les activités',
       count: allActivities.length,
       totalSynced: startFrom + allActivities.length,
       hasMore,
-      nextStart: hasMore ? start : null
+      nextStart: hasMore ? start : null,
+      mode: onlyPending ? 'pending_only' : 'all_activities'
     });
 
   } catch (error) {
