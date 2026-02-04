@@ -2,7 +2,11 @@ import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request) {
+  const { searchParams } = new URL(request.url);
+  // Par défaut, on filtre les deals commerciaux uniquement
+  const showAll = searchParams.get('all') === 'true';
+  
   const supabase = createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY
@@ -14,11 +18,18 @@ export async function GET() {
     const pageSize = 1000;
     
     while (true) {
-      const { data, error } = await supabase
+      let query = supabase
         .from('deals')
         .select('*')
-        .order('date_create', { ascending: false })
-        .range(from, from + pageSize - 1);
+        .order('date_create', { ascending: false });
+      
+      // Filtrer uniquement les deals commerciaux (sauf si ?all=true)
+      if (!showAll) {
+        // is_commercial = true (exclut C1:Recrutement et C5:Parrainage)
+        query = query.eq('is_commercial', true);
+      }
+      
+      const { data, error } = await query.range(from, from + pageSize - 1);
       
       if (error) throw error;
       if (!data || data.length === 0) break;
@@ -29,6 +40,7 @@ export async function GET() {
       if (data.length < pageSize) break;
     }
 
+    // Transformer pour compatibilité avec le frontend existant
     const deals = allDeals.map(d => ({
       ID: d.id,
       TITLE: d.title,
@@ -38,14 +50,19 @@ export async function GET() {
       DATE_MODIFY: d.date_modify,
       CLOSEDATE: d.closedate,
       OPPORTUNITY: d.opportunity,
+      OPPORTUNITY_EUR: d.opportunity_eur,  // NOUVEAU - Montant en EUR
       CURRENCY_ID: d.currency_id,
       LEAD_ID: d.lead_id,
-      LAST_ACTIVITY_TIME: d.last_activity_time,
-      LAST_ACTIVITY_BY: d.last_activity_by,
-      MOVED_TIME: d.moved_time
+      PIPELINE: d.pipeline,                // NOUVEAU - DOCTOUR, C1, C3, C5
+      IS_COMMERCIAL: d.is_commercial       // NOUVEAU - true/false
     }));
 
-    return Response.json({ success: true, data: deals, total: deals.length });
+    return Response.json({ 
+      success: true, 
+      data: deals, 
+      total: deals.length,
+      filtered: !showAll  // Indique si les données sont filtrées
+    });
   } catch (error) {
     console.error('Erreur deals:', error);
     return Response.json({ success: false, error: error.message }, { status: 500 });
