@@ -9,12 +9,17 @@ const cleanDate = (d) => (d && d !== '' ? d : null);
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const startFrom = parseInt(searchParams.get('start') || '0');
-  // CHANGEMENT: Par défaut, récupérer TOUTES les activités (pending=false)
-  // Pour ne récupérer que les pending, passer ?pending=true
+  // Par défaut: 90 derniers jours. Pour tout récupérer: ?all=true
+  const fetchAll = searchParams.get('all') === 'true';
   const onlyPending = searchParams.get('pending') === 'true';
   
   const BITRIX_URL = process.env.BITRIX_API_URL;
   const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+
+  // Filtre 90 jours
+  const ninetyDaysAgo = new Date();
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+  const dateFilter = ninetyDaysAgo.toISOString().split('T')[0];
 
   try {
     const allActivities = [];
@@ -32,6 +37,11 @@ export async function GET(request) {
       // Seulement filtrer sur COMPLETED si onlyPending est true
       if (onlyPending) url += `&filter[COMPLETED]=N`;
       url += `&filter[OWNER_TYPE_ID][0]=1&filter[OWNER_TYPE_ID][1]=2`;
+      
+      // OPTIMISATION: 90 derniers jours sauf si ?all=true
+      if (!fetchAll) {
+        url += `&filter[>CREATED]=${dateFilter}`;
+      }
       
       const response = await fetch(url);
       
@@ -88,7 +98,8 @@ export async function GET(request) {
       totalSynced: startFrom + allActivities.length,
       hasMore,
       nextStart: hasMore ? start : null,
-      mode: onlyPending ? 'pending_only' : 'all_activities'
+      mode: fetchAll ? 'all_activities' : `last_90_days (since ${dateFilter})`,
+      pendingOnly: onlyPending
     });
 
   } catch (error) {
