@@ -52,6 +52,7 @@ export async function GET(request) {
       DATE_CREATE: l.date_create,
       DATE_MODIFY: l.date_modify,
       DATE_CLOSED: l.date_closed,
+      LAST_ACTIVITY_TIME: l.last_activity_time,  // AJOUTÉ - dernier contact réel
       OPPORTUNITY: l.opportunity,
       OPPORTUNITY_EUR: l.opportunity_eur,  // NOUVEAU
       CURRENCY_ID: l.currency_id,
