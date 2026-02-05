@@ -43,6 +43,9 @@ export async function GET(request) {
         url += `&filter[>CREATED]=${dateFilter}`;
       }
       
+      // Tri par ID décroissant = activités les plus récentes en premier
+      url += `&order[ID]=DESC`;
+      
       const response = await fetch(url);
       
       if (response.status === 429) {
