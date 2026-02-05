@@ -1427,7 +1427,13 @@ export default function Dashboard() {
     const caWonToday = wonToday.reduce((sum, d) => sum + parseFloat(d.OPPORTUNITY || 0), 0);
     
     // PRÉVU - Activités planifiées pour ce jour
-    const activitiesPlanned = rawActivities.filter(a => isSameDay(a.DEADLINE, dateStr));
+    // EXCLURE les to-do automatiques "Contacter le client" (PROVIDER_ID = CRM_TODO)
+    const activitiesPlanned = rawActivities.filter(a => {
+      if (!isSameDay(a.DEADLINE, dateStr)) return false;
+      // Exclure les to-do automatiques
+      if (a.PROVIDER_ID === 'CRM_TODO') return false;
+      return true;
+    });
     
     // Fonction pour vérifier si une activité prévue est "effectivement faite"
     // = completed OU une nouvelle activité a été créée sur ce lead/deal ce jour
@@ -1627,10 +1633,14 @@ export default function Dashboard() {
     const lastDay = days[0];
     
     // Activités prévues sur la période (deadline dans les 7 derniers jours ouvrés)
+    // EXCLURE les to-do automatiques "Contacter le client"
     const plannedActivities = rawActivities.filter(a => {
       if (!a.DEADLINE) return false;
       const dl = a.DEADLINE.slice(0, 10);
-      return dl >= firstDay && dl <= lastDay;
+      if (dl < firstDay || dl > lastDay) return false;
+      // Exclure les to-do automatiques
+      if (a.PROVIDER_ID === 'CRM_TODO') return false;
+      return true;
     });
     
     // Activités créées sur la période (EXCLURE les to-do automatiques)
