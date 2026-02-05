@@ -1407,7 +1407,13 @@ export default function Dashboard() {
     
     // ACTIVITÉS CRÉÉES = TRAVAIL RÉEL
     // On compte les activités créées ce jour-là par commercial (appels, emails, tâches, RDV)
-    const activitiesCreatedToday = rawActivities.filter(a => isSameDay(a.CREATED, dateStr));
+    // EXCLURE les to-do automatiques "Contacter le client" (PROVIDER_ID = CRM_TODO)
+    const activitiesCreatedToday = rawActivities.filter(a => {
+      if (!isSameDay(a.CREATED, dateStr)) return false;
+      // Exclure les to-do automatiques
+      if (a.PROVIDER_ID === 'CRM_TODO') return false;
+      return true;
+    });
     
     // Nouveaux leads créés aujourd'hui (vrais nouveaux leads, pas modifiés)
     const leadsCreated = rawLeads.filter(l => isSameDay(l.DATE_CREATE, dateStr));
@@ -1470,9 +1476,16 @@ export default function Dashboard() {
       // Activités créées par ce commercial aujourd'hui = TRAVAIL RÉEL
       const userActivitiesCreated = activitiesCreatedToday.filter(a => a.RESPONSIBLE_ID === userId);
       
-      // Détail par type d'activité
+      // Détail par type d'activité avec séparation entrant/sortant
+      // DIRECTION: 1 = entrant, 2 = sortant
+      const userAppelsOut = userActivitiesCreated.filter(a => a.TYPE_ID === '2' && a.DIRECTION === '2').length;
+      const userAppelsIn = userActivitiesCreated.filter(a => a.TYPE_ID === '2' && a.DIRECTION === '1').length;
       const userAppels = userActivitiesCreated.filter(a => a.TYPE_ID === '2').length;
+      
+      const userEmailsOut = userActivitiesCreated.filter(a => a.TYPE_ID === '4' && a.DIRECTION === '2').length;
+      const userEmailsIn = userActivitiesCreated.filter(a => a.TYPE_ID === '4' && a.DIRECTION === '1').length;
       const userEmails = userActivitiesCreated.filter(a => a.TYPE_ID === '4').length;
+      
       const userTaches = userActivitiesCreated.filter(a => a.TYPE_ID === '3' || a.TYPE_ID === '6').length;
       const userRdv = userActivitiesCreated.filter(a => a.TYPE_ID === '1').length;
       
@@ -1497,7 +1510,11 @@ export default function Dashboard() {
         // TRAVAIL RÉEL = activités créées
         activitiesCreated: userActivitiesCreated.length,
         appels: userAppels,
+        appelsOut: userAppelsOut,
+        appelsIn: userAppelsIn,
         emails: userEmails,
+        emailsOut: userEmailsOut,
+        emailsIn: userEmailsIn,
         taches: userTaches,
         rdv: userRdv,
         // Autres métriques
@@ -1509,26 +1526,46 @@ export default function Dashboard() {
         activitiesPlanned: userActivitiesPlanned.length,
         activitiesDone: userActivitiesDone.length,
         activitiesPending: userActivitiesPending.length,
-        pendingList: userActivitiesPending.map(a => {
-          const ownerType = a.OWNER_TYPE_ID === '1' ? 'lead' : 'deal';
-          const owner = ownerType === 'lead' 
-            ? rawLeads.find(l => l.ID === a.OWNER_ID)
-            : commercialDeals.find(d => d.ID === a.OWNER_ID);
-          return {
-            id: a.ID,
-            subject: a.SUBJECT || 'Sans sujet',
-            type: a.TYPE_ID,
-            ownerType,
-            ownerName: owner?.TITLE || owner?.NAME || 'Inconnu',
-            ownerId: a.OWNER_ID,
-            deadline: a.DEADLINE
-          };
-        })
+        // DÉDOUBLONNER les relances par patient (OWNER_ID unique)
+        pendingList: (() => {
+          const seenOwners = new Set();
+          return userActivitiesPending
+            .filter(a => {
+              const key = `${a.OWNER_TYPE_ID}-${a.OWNER_ID}`;
+              if (seenOwners.has(key)) return false;
+              seenOwners.add(key);
+              return true;
+            })
+            .map(a => {
+              const ownerType = a.OWNER_TYPE_ID === '1' ? 'lead' : 'deal';
+              const owner = ownerType === 'lead' 
+                ? rawLeads.find(l => l.ID === a.OWNER_ID)
+                : commercialDeals.find(d => d.ID === a.OWNER_ID);
+              return {
+                id: a.ID,
+                subject: a.SUBJECT || 'Sans sujet',
+                type: a.TYPE_ID,
+                ownerType,
+                ownerName: owner?.TITLE || owner?.NAME || 'Inconnu',
+                ownerId: a.OWNER_ID,
+                deadline: a.DEADLINE
+              };
+            });
+        })()
       };
     });
     
     // Liste des activités en retard (prévues mais non faites)
-    const pendingActivitiesList = activitiesPlannedPending.map(a => {
+    // DÉDOUBLONNER par patient (OWNER_ID unique) pour éviter les doublons task + to-do
+    const seenOwnersGlobal = new Set();
+    const pendingActivitiesList = activitiesPlannedPending
+      .filter(a => {
+        const key = `${a.OWNER_TYPE_ID}-${a.OWNER_ID}`;
+        if (seenOwnersGlobal.has(key)) return false;
+        seenOwnersGlobal.add(key);
+        return true;
+      })
+      .map(a => {
       const ownerType = a.OWNER_TYPE_ID === '1' ? 'lead' : 'deal';
       const owner = ownerType === 'lead' 
         ? rawLeads.find(l => l.ID === a.OWNER_ID)
@@ -1596,11 +1633,14 @@ export default function Dashboard() {
       return dl >= firstDay && dl <= lastDay;
     });
     
-    // Activités créées sur la période
+    // Activités créées sur la période (EXCLURE les to-do automatiques)
     const createdActivities = rawActivities.filter(a => {
       if (!a.CREATED) return false;
       const cr = a.CREATED.slice(0, 10);
-      return cr >= firstDay && cr <= lastDay;
+      if (cr < firstDay || cr > lastDay) return false;
+      // Exclure les to-do automatiques "Contacter le client"
+      if (a.PROVIDER_ID === 'CRM_TODO') return false;
+      return true;
     });
     
     // Commerciaux actifs
@@ -2506,8 +2546,10 @@ DOCTOUR Analytics`);
                     <tr className="border-b border-slate-700 text-slate-400">
                       <th className="p-2 text-left">Commercial</th>
                       <th className="p-2 text-right">📞 Activités</th>
-                      <th className="p-2 text-right">📱 Appels</th>
-                      <th className="p-2 text-right">📧 Emails</th>
+                      <th className="p-2 text-right" title="Appels sortants">📱↗️ Out</th>
+                      <th className="p-2 text-right" title="Appels entrants">📱↙️ In</th>
+                      <th className="p-2 text-right" title="Emails envoyés">📧↗️ Out</th>
+                      <th className="p-2 text-right" title="Emails reçus">📧↙️ In</th>
                       <th className="p-2 text-right">➕ Leads</th>
                       <th className="p-2 text-right">🔄 Conv.</th>
                       <th className="p-2 text-right">🏆 Won</th>
@@ -2521,8 +2563,10 @@ DOCTOUR Analytics`);
                       <tr key={c.id} className="border-b border-slate-800 hover:bg-slate-700/30">
                         <td className="p-2 font-medium">{c.name}</td>
                         <td className="p-2 text-right">{c.activitiesCreated > 0 ? <Badge color="blue">{c.activitiesCreated}</Badge> : <span className="text-slate-500">0</span>}</td>
-                        <td className="p-2 text-right">{c.appels > 0 ? <Badge color="green">{c.appels}</Badge> : <span className="text-slate-500">0</span>}</td>
-                        <td className="p-2 text-right">{c.emails > 0 ? <Badge color="cyan">{c.emails}</Badge> : <span className="text-slate-500">0</span>}</td>
+                        <td className="p-2 text-right">{c.appelsOut > 0 ? <Badge color="green">{c.appelsOut}</Badge> : <span className="text-slate-500">0</span>}</td>
+                        <td className="p-2 text-right">{c.appelsIn > 0 ? <Badge color="emerald">{c.appelsIn}</Badge> : <span className="text-slate-500">0</span>}</td>
+                        <td className="p-2 text-right">{c.emailsOut > 0 ? <Badge color="cyan">{c.emailsOut}</Badge> : <span className="text-slate-500">0</span>}</td>
+                        <td className="p-2 text-right">{c.emailsIn > 0 ? <Badge color="blue">{c.emailsIn}</Badge> : <span className="text-slate-500">0</span>}</td>
                         <td className="p-2 text-right">{c.leadsCreated > 0 ? <Badge color="purple">{c.leadsCreated}</Badge> : <span className="text-slate-500">0</span>}</td>
                         <td className="p-2 text-right">{c.dealsCreated > 0 ? <Badge color="orange">{c.dealsCreated}</Badge> : <span className="text-slate-500">0</span>}</td>
                         <td className="p-2 text-right">{c.won > 0 ? <Badge color="green">{c.won}</Badge> : <span className="text-slate-500">0</span>}</td>
@@ -2531,7 +2575,7 @@ DOCTOUR Analytics`);
                         <td className="p-2 text-right">{c.activitiesPending > 0 ? <Badge color="red">{c.activitiesPending}</Badge> : <span className="text-emerald-400">✓</span>}</td>
                       </tr>
                     )) : (
-                      <tr><td colSpan="10" className="p-4 text-center text-slate-500">Aucune activité pour cette date</td></tr>
+                      <tr><td colSpan="12" className="p-4 text-center text-slate-500">Aucune activité pour cette date</td></tr>
                     )}
                   </tbody>
                 </table>
