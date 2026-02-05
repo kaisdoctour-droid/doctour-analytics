@@ -33,6 +33,7 @@ export async function GET(request) {
       url += `&select[]=SUBJECT&select[]=COMPLETED&select[]=RESPONSIBLE_ID`;
       url += `&select[]=CREATED&select[]=LAST_UPDATED&select[]=DEADLINE`;
       url += `&select[]=START_TIME&select[]=END_TIME&select[]=DIRECTION`;
+      url += `&select[]=PROVIDER_ID`;
       
       // Seulement filtrer sur COMPLETED si onlyPending est true
       if (onlyPending) url += `&filter[COMPLETED]=N`;
@@ -84,6 +85,7 @@ export async function GET(request) {
         start_time: cleanDate(a.START_TIME),
         end_time: cleanDate(a.END_TIME),
         direction: a.DIRECTION || null,
+        provider_id: a.PROVIDER_ID || null,
         updated_at: new Date().toISOString()
       }));
       
