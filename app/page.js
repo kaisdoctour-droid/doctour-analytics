@@ -36,6 +36,10 @@ export default function Dashboard() {
   // Onglet Aujourd'hui
   const [selectedDayDate, setSelectedDayDate] = useState(new Date().toISOString().slice(0, 10));
 
+  // Sous-onglet Commerciaux
+  const [commerciauxSubTab, setCommerciauxSubTab] = useState('performance'); // 'performance' ou 'productivite'
+  const [productivitePeriod, setProductivitePeriod] = useState('7'); // '1', '7', '30' jours
+
   const [rawLeads, setRawLeads] = useState([]);
   const [rawDeals, setRawDeals] = useState([]);
   const [rawUsers, setRawUsers] = useState([]);
@@ -1228,22 +1232,15 @@ export default function Dashboard() {
     // Calculer les stats par commercial
     const commercialAllocation = {};
     
-    // Commerciaux exclus de l'Allocation (pas de campagnes pub)
-    const excludeFromAllocation = ['Wassim', 'Houda', 'Yosra'];
-    const shouldExcludeFromAllocation = (name) => {
-      if (!name) return true;
-      return excludeFromAllocation.some(excluded => name.toLowerCase().includes(excluded.toLowerCase()));
-    };
-    
     // Identifier les commerciaux actifs (ceux qui ont des leads ou deals récents ET sont dans rawUsers)
     const activeCommercialIds = new Set();
     recentLeads.forEach(l => {
-      if (l.ASSIGNED_BY_ID && activeUserIds.has(l.ASSIGNED_BY_ID) && !shouldExcludeFromStats(getUserName(l.ASSIGNED_BY_ID)) && !shouldExcludeFromAllocation(getUserName(l.ASSIGNED_BY_ID))) {
+      if (l.ASSIGNED_BY_ID && activeUserIds.has(l.ASSIGNED_BY_ID) && !shouldExcludeFromStats(getUserName(l.ASSIGNED_BY_ID))) {
         activeCommercialIds.add(l.ASSIGNED_BY_ID);
       }
     });
     recentDeals.forEach(d => {
-      if (d.ASSIGNED_BY_ID && activeUserIds.has(d.ASSIGNED_BY_ID) && !shouldExcludeFromStats(getUserName(d.ASSIGNED_BY_ID)) && !shouldExcludeFromAllocation(getUserName(d.ASSIGNED_BY_ID))) {
+      if (d.ASSIGNED_BY_ID && activeUserIds.has(d.ASSIGNED_BY_ID) && !shouldExcludeFromStats(getUserName(d.ASSIGNED_BY_ID))) {
         activeCommercialIds.add(d.ASSIGNED_BY_ID);
       }
     });
@@ -1251,7 +1248,6 @@ export default function Dashboard() {
     activeCommercialIds.forEach(commercialId => {
       const name = getUserName(commercialId);
       if (shouldExcludeFromStats(name)) return;
-      if (shouldExcludeFromAllocation(name)) return;
       
       // Leads du commercial (60 derniers jours)
       const leads = recentLeads.filter(l => l.ASSIGNED_BY_ID === commercialId);
@@ -1780,6 +1776,141 @@ export default function Dashboard() {
     return results.sort((a, b) => a.txTraitement - b.txTraitement); // Pires en premier
   }, [rawActivities, rawDeals, rawUsers, getUserName]);
 
+  // ====== STATISTIQUES DE PRODUCTIVITÉ ======
+  const productiviteStats = useMemo(() => {
+    if (!rawActivities.length) return { commerciaux: [], totaux: {}, historique: [] };
+    
+    const now = new Date();
+    const periodDays = parseInt(productivitePeriod) || 7;
+    const startDate = new Date(now.getTime() - periodDays * 24 * 60 * 60 * 1000);
+    const joursOuvres = Math.round(periodDays * 5 / 7); // Approximation jours ouvrés
+    
+    // Commerciaux actifs (exclure non-commerciaux)
+    const excludeFromProductivite = ['Wassim', 'Houda', 'Yosra', 'Bad Lead', 'Atef', 'Saber'];
+    const activeUsers = rawUsers.filter(u => {
+      if (u.ACTIVE !== 'true' && u.ACTIVE !== true) return false;
+      const name = getUserName(u.ID);
+      if (shouldExcludeFromStats(name)) return false;
+      if (excludeFromProductivite.some(ex => name.toLowerCase().includes(ex.toLowerCase()))) return false;
+      return true;
+    });
+    
+    // Activités de la période (exclure CRM_TODO automatiques)
+    const activitesPeriode = rawActivities.filter(a => {
+      if (!a.CREATED) return false;
+      if (new Date(a.CREATED) < startDate) return false;
+      if (a.PROVIDER_ID === 'CRM_TODO') return false;
+      return true;
+    });
+    
+    const results = [];
+    
+    activeUsers.forEach(user => {
+      const userId = user.ID;
+      const name = getUserName(userId);
+      
+      // Activités du commercial
+      const userActivities = activitesPeriode.filter(a => a.RESPONSIBLE_ID === userId);
+      if (userActivities.length === 0 && periodDays <= 7) return; // Pas d'activité récente
+      
+      // Fiches touchées (dédoublonné)
+      const fichesTouchees = new Set();
+      userActivities.forEach(a => fichesTouchees.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
+      
+      // Par type d'activité
+      const appels = userActivities.filter(a => a.TYPE_ID === '2' || a.TYPE_ID === 2);
+      const emails = userActivities.filter(a => a.TYPE_ID === '4' || a.TYPE_ID === 4);
+      const rdv = userActivities.filter(a => a.TYPE_ID === '1' || a.TYPE_ID === 1);
+      const taches = userActivities.filter(a => a.TYPE_ID === '3' || a.TYPE_ID === 3 || a.TYPE_ID === '6' || a.TYPE_ID === 6);
+      
+      // Appels entrants vs sortants
+      const appelsEntrants = appels.filter(a => a.DIRECTION === '1' || a.DIRECTION === 1);
+      const appelsSortants = appels.filter(a => a.DIRECTION === '2' || a.DIRECTION === 2);
+      
+      // 1ers contacts (activité sur un lead créé dans les 24h avant)
+      const premiersContacts = userActivities.filter(a => {
+        if (a.OWNER_TYPE_ID !== '1') return false;
+        const lead = rawLeads.find(l => l.ID === a.OWNER_ID);
+        if (!lead || !lead.DATE_CREATE || !a.CREATED) return false;
+        const leadDate = new Date(lead.DATE_CREATE);
+        const activityDate = new Date(a.CREATED);
+        const diffHours = (activityDate - leadDate) / (1000 * 60 * 60);
+        return diffHours >= 0 && diffHours <= 24;
+      });
+      const premiersContactsUniques = new Set();
+      premiersContacts.forEach(a => premiersContactsUniques.add(a.OWNER_ID));
+      
+      // Moyennes par jour
+      const fichesParJour = joursOuvres > 0 ? fichesTouchees.size / joursOuvres : 0;
+      const appelsParJour = joursOuvres > 0 ? appels.length / joursOuvres : 0;
+      const emailsParJour = joursOuvres > 0 ? emails.length / joursOuvres : 0;
+      
+      results.push({
+        id: userId,
+        name,
+        // Totaux période
+        totalActivites: userActivities.length,
+        fichesTouchees: fichesTouchees.size,
+        appels: appels.length,
+        appelsEntrants: appelsEntrants.length,
+        appelsSortants: appelsSortants.length,
+        emails: emails.length,
+        rdv: rdv.length,
+        taches: taches.length,
+        premiersContacts: premiersContactsUniques.size,
+        // Moyennes par jour
+        fichesParJour: Math.round(fichesParJour * 10) / 10,
+        appelsParJour: Math.round(appelsParJour * 10) / 10,
+        emailsParJour: Math.round(emailsParJour * 10) / 10,
+        // Score productivité (sur 100)
+        score: Math.min(100, Math.round(
+          (Math.min(fichesParJour / 15, 1) * 40) + // Fiches/jour (max 15 = 40 pts)
+          (Math.min(appelsParJour / 20, 1) * 30) + // Appels/jour (max 20 = 30 pts)
+          (Math.min(premiersContactsUniques.size / (periodDays * 2), 1) * 30) // 1ers contacts (30 pts)
+        ))
+      });
+    });
+    
+    // Trier par score
+    results.sort((a, b) => b.score - a.score);
+    
+    // Totaux équipe
+    const totaux = {
+      activites: results.reduce((sum, c) => sum + c.totalActivites, 0),
+      fiches: results.reduce((sum, c) => sum + c.fichesTouchees, 0),
+      appels: results.reduce((sum, c) => sum + c.appels, 0),
+      emails: results.reduce((sum, c) => sum + c.emails, 0),
+      rdv: results.reduce((sum, c) => sum + c.rdv, 0),
+      premiersContacts: results.reduce((sum, c) => sum + c.premiersContacts, 0)
+    };
+    
+    // Historique par jour (7 derniers jours)
+    const historique = [];
+    for (let i = 0; i < Math.min(periodDays, 14); i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const dow = d.getDay();
+      if (dow === 0 || dow === 6) continue; // Skip weekends
+      
+      const dayActivities = activitesPeriode.filter(a => a.CREATED && a.CREATED.slice(0, 10) === dateStr);
+      const dayFiches = new Set();
+      dayActivities.forEach(a => dayFiches.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
+      
+      historique.push({
+        date: dateStr,
+        label: d.toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit' }),
+        activites: dayActivities.length,
+        fiches: dayFiches.size,
+        appels: dayActivities.filter(a => a.TYPE_ID === '2' || a.TYPE_ID === 2).length,
+        emails: dayActivities.filter(a => a.TYPE_ID === '4' || a.TYPE_ID === 4).length
+      });
+    }
+    historique.reverse(); // Du plus ancien au plus récent
+    
+    return { commerciaux: results, totaux, historique };
+  }, [rawActivities, rawLeads, rawUsers, getUserName, productivitePeriod]);
+
   const exportRetards = (commercialId, type = 'leads') => {
     const data = type === 'leads' ? alertsLeads.byCommercial[commercialId] : alertsDeals.byCommercial[commercialId];
     if (!data) return;
@@ -2117,9 +2248,90 @@ DOCTOUR Analytics`);
                 </div>
               </Card>
             )}
+
+            {/* PRODUCTIVITÉ */}
+            <Card title="⚡ Productivité — 7 derniers jours" icon="📊">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-slate-400 text-sm">Période :</span>
+                <div className="flex gap-2">
+                  {[
+                    { value: '1', label: "Aujourd'hui" },
+                    { value: '7', label: '7 jours' },
+                    { value: '30', label: '30 jours' }
+                  ].map(p => (
+                    <button
+                      key={p.value}
+                      onClick={() => setProductivitePeriod(p.value)}
+                      className={`px-3 py-1 rounded text-sm ${productivitePeriod === p.value ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {activitiesLoading ? (
+                <div className="text-center py-8 text-slate-400">
+                  <span className="animate-spin inline-block mr-2">⏳</span>
+                  Chargement des activités...
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700 text-slate-400">
+                        <th className="p-2 text-left">#</th>
+                        <th className="p-2 text-left">Commercial</th>
+                        <th className="p-2 text-center" title="Score de productivité">Score</th>
+                        <th className="p-2 text-right" title="Fiches touchées (dédoublonné)">📁 Fiches</th>
+                        <th className="p-2 text-right" title="Fiches par jour">📁/j</th>
+                        <th className="p-2 text-right" title="Appels passés">📞 Appels</th>
+                        <th className="p-2 text-right" title="Appels sortants">↗️ Sort.</th>
+                        <th className="p-2 text-right" title="Appels entrants">↙️ Entr.</th>
+                        <th className="p-2 text-right" title="Emails envoyés">📧 Emails</th>
+                        <th className="p-2 text-right" title="RDV réalisés">📅 RDV</th>
+                        <th className="p-2 text-right" title="1ers contacts sur nouveaux leads">🆕 1er</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {productiviteStats.commerciaux.map((c, index) => (
+                        <tr key={c.id} className={`border-b border-slate-800 hover:bg-slate-800/50 ${index === 0 ? 'bg-yellow-500/5' : index === 1 ? 'bg-slate-500/5' : index === 2 ? 'bg-orange-500/5' : ''}`}>
+                          <td className="p-2 text-center">
+                            {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : <span className="text-slate-500">{index + 1}</span>}
+                          </td>
+                          <td className="p-2 font-medium">{c.name}</td>
+                          <td className="p-2 text-center">
+                            <Badge color={c.score >= 70 ? 'green' : c.score >= 50 ? 'blue' : c.score >= 30 ? 'yellow' : 'red'} size="sm">
+                              {c.score}
+                            </Badge>
+                          </td>
+                          <td className="p-2 text-right font-mono">{c.fichesTouchees}</td>
+                          <td className="p-2 text-right">
+                            <Badge color={c.fichesParJour >= 15 ? 'green' : c.fichesParJour >= 10 ? 'blue' : c.fichesParJour >= 5 ? 'yellow' : 'red'} size="xs">
+                              {c.fichesParJour}
+                            </Badge>
+                          </td>
+                          <td className="p-2 text-right font-mono text-emerald-400">{c.appels}</td>
+                          <td className="p-2 text-right font-mono text-cyan-400">{c.appelsSortants}</td>
+                          <td className="p-2 text-right font-mono text-slate-400">{c.appelsEntrants}</td>
+                          <td className="p-2 text-right font-mono text-blue-400">{c.emails}</td>
+                          <td className="p-2 text-right font-mono text-pink-400">{c.rdv}</td>
+                          <td className="p-2 text-right font-mono text-yellow-400">{c.premiersContacts}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="flex gap-4 mt-3 text-xs text-slate-500">
+                <span>📁 Fiches = patients uniques contactés</span>
+                <span>🆕 1er = 1er contact dans les 24h après création du lead</span>
+                <span>Score = Fiches/j (40pts) + Appels/j (30pts) + 1ers contacts (30pts)</span>
+              </div>
+            </Card>
           </div>
         )}
-
+                            <th className="p-2 text-right" title="Appels passés">📞 Appels</th>
+                            <th className="p-2 text-right" title="Appels sortants">↗️ Sort.</th>
         {activeTab === 'sources' && (
           <Card title="Top Sources (min 10 convertis)">
             <div className="overflow-x-auto">
