@@ -1568,6 +1568,123 @@ export default function Dashboard() {
     };
   }, [selectedDayDate, rawLeads, rawDeals, rawActivities, getUserName]);
 
+  // === DISCIPLINE 7 JOURS ===
+  const disciplineStats = useMemo(() => {
+    if (!rawActivities.length) return [];
+    
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    
+    // 7 derniers jours ouvrés (on prend 10 jours calendaires pour couvrir les weekends)
+    const days = [];
+    for (let i = 1; i <= 10; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dow = d.getDay();
+      if (dow !== 0 && dow !== 6) days.push(d.toISOString().slice(0, 10));
+      if (days.length >= 7) break;
+    }
+    if (days.length === 0) return [];
+    
+    const firstDay = days[days.length - 1];
+    const lastDay = days[0];
+    
+    // Activités prévues sur la période (deadline dans les 7 derniers jours ouvrés)
+    const plannedActivities = rawActivities.filter(a => {
+      if (!a.DEADLINE) return false;
+      const dl = a.DEADLINE.slice(0, 10);
+      return dl >= firstDay && dl <= lastDay;
+    });
+    
+    // Activités créées sur la période
+    const createdActivities = rawActivities.filter(a => {
+      if (!a.CREATED) return false;
+      const cr = a.CREATED.slice(0, 10);
+      return cr >= firstDay && cr <= lastDay;
+    });
+    
+    // Commerciaux actifs
+    const activeUserIds = new Set();
+    rawUsers.forEach(u => {
+      if (u.ACTIVE === 'true' || u.ACTIVE === true) {
+        const name = getUserName(u.ID);
+        if (!shouldExcludeFromStats(name) && name !== 'Inconnu') {
+          activeUserIds.add(u.ID);
+        }
+      }
+    });
+    
+    const results = [];
+    
+    activeUserIds.forEach(userId => {
+      const name = getUserName(userId);
+      
+      // Relances prévues pour ce commercial
+      const userPlanned = plannedActivities.filter(a => a.RESPONSIBLE_ID === userId);
+      if (userPlanned.length === 0) return; // Pas de relances prévues = pas pertinent
+      
+      // Relances traitées (completed = true)
+      const userDone = userPlanned.filter(a => a.COMPLETED === 'true');
+      
+      // Relances non traitées
+      const userPending = userPlanned.filter(a => a.COMPLETED !== 'true');
+      
+      // Taux de traitement
+      const txTraitement = userPlanned.length > 0 ? (userDone.length / userPlanned.length) * 100 : 0;
+      
+      // Activités créées (travail réel)
+      const userCreated = createdActivities.filter(a => a.RESPONSIBLE_ID === userId);
+      
+      // Détail par jour - pour détecter les jours d'accumulation
+      const joursAvecRetard = [];
+      days.forEach(day => {
+        const dayPlanned = userPlanned.filter(a => a.DEADLINE && a.DEADLINE.slice(0, 10) === day);
+        const dayDone = dayPlanned.filter(a => a.COMPLETED === 'true');
+        const dayPending = dayPlanned.filter(a => a.COMPLETED !== 'true');
+        if (dayPending.length > 0) {
+          joursAvecRetard.push({ date: day, pending: dayPending.length, planned: dayPlanned.length });
+        }
+      });
+      
+      // Premier jour de retard (le plus ancien)
+      const premierRetard = joursAvecRetard.length > 0 
+        ? joursAvecRetard.sort((a, b) => a.date.localeCompare(b.date))[0].date
+        : null;
+      
+      // Jours d'accumulation consécutifs
+      const joursAccumulation = joursAvecRetard.length;
+      
+      // CA en danger (deals avec relances non traitées)
+      const dealsEnDanger = new Set();
+      let caEnDanger = 0;
+      userPending.forEach(a => {
+        if (a.OWNER_TYPE_ID === '2' && !dealsEnDanger.has(a.OWNER_ID)) {
+          dealsEnDanger.add(a.OWNER_ID);
+          const deal = rawDeals.find(d => d.ID === a.OWNER_ID);
+          if (deal) caEnDanger += parseFloat(deal.OPPORTUNITY || 0);
+        }
+      });
+      
+      results.push({
+        id: userId,
+        name,
+        planned: userPlanned.length,
+        done: userDone.length,
+        pending: userPending.length,
+        txTraitement: Math.round(txTraitement),
+        created: userCreated.length,
+        joursAccumulation,
+        premierRetard,
+        dealsEnDanger: dealsEnDanger.size,
+        caEnDanger,
+        // Indicateur de santé
+        sante: txTraitement >= 90 ? 'excellent' : txTraitement >= 70 ? 'bon' : txTraitement >= 50 ? 'moyen' : 'critique'
+      });
+    });
+    
+    return results.sort((a, b) => a.txTraitement - b.txTraitement); // Pires en premier
+  }, [rawActivities, rawDeals, rawUsers, getUserName]);
+
   const exportRetards = (commercialId, type = 'leads') => {
     const data = type === 'leads' ? alertsLeads.byCommercial[commercialId] : alertsDeals.byCommercial[commercialId];
     if (!data) return;
@@ -1851,6 +1968,60 @@ DOCTOUR Analytics`);
                 </table>
               </div>
             </Card>
+
+            {/* DISCIPLINE 7 JOURS */}
+            {disciplineStats.length > 0 && (
+              <Card title="📊 Discipline — 7 derniers jours ouvrés" icon="🎯">
+                <p className="text-slate-400 text-sm mb-3">Taux de traitement des relances planifiées. Les commerciaux avec le plus de retard apparaissent en premier.</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-700 text-slate-400">
+                        <th className="p-2 text-left">Commercial</th>
+                        <th className="p-2 text-right">Prévues</th>
+                        <th className="p-2 text-right">Faites</th>
+                        <th className="p-2 text-right">En retard</th>
+                        <th className="p-2 text-right">% Traitement</th>
+                        <th className="p-2 text-right">Activités créées</th>
+                        <th className="p-2 text-right">Jours retard</th>
+                        <th className="p-2 text-right">Depuis</th>
+                        <th className="p-2 text-right">Deals en danger</th>
+                        <th className="p-2 text-right">CA en danger</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {disciplineStats.map(c => (
+                        <tr key={c.id} className={`border-b border-slate-800 hover:bg-slate-800/50 ${c.sante === 'critique' ? 'bg-red-500/5' : ''}`}>
+                          <td className="p-2 font-medium flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${c.sante === 'excellent' ? 'bg-emerald-400' : c.sante === 'bon' ? 'bg-blue-400' : c.sante === 'moyen' ? 'bg-amber-400' : 'bg-red-400'}`}></span>
+                            {c.name}
+                          </td>
+                          <td className="p-2 text-right font-mono">{c.planned}</td>
+                          <td className="p-2 text-right font-mono text-emerald-400">{c.done}</td>
+                          <td className="p-2 text-right font-mono">{c.pending > 0 ? <Badge color="red" size="xs">{c.pending}</Badge> : <span className="text-emerald-400">0</span>}</td>
+                          <td className="p-2 text-right">
+                            <Badge color={c.txTraitement >= 90 ? 'green' : c.txTraitement >= 70 ? 'blue' : c.txTraitement >= 50 ? 'yellow' : 'red'} size="xs">
+                              {c.txTraitement}%
+                            </Badge>
+                          </td>
+                          <td className="p-2 text-right font-mono text-cyan-400">{c.created}</td>
+                          <td className="p-2 text-right">{c.joursAccumulation > 0 ? <Badge color={c.joursAccumulation >= 3 ? 'red' : 'orange'} size="xs">{c.joursAccumulation}j</Badge> : <span className="text-emerald-400">✓</span>}</td>
+                          <td className="p-2 text-right text-slate-400">{c.premierRetard ? new Date(c.premierRetard).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) : '-'}</td>
+                          <td className="p-2 text-right font-mono">{c.dealsEnDanger > 0 ? <Badge color="orange" size="xs">{c.dealsEnDanger}</Badge> : '-'}</td>
+                          <td className="p-2 text-right font-mono text-red-400">{c.caEnDanger > 0 ? formatCurrency(c.caEnDanger) : '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex gap-4 mt-3 text-xs text-slate-500">
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400"></span> ≥90% Excellent</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400"></span> ≥70% Bon</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400"></span> ≥50% Moyen</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400"></span> &lt;50% Critique</span>
+                </div>
+              </Card>
+            )}
           </div>
         )}
 
