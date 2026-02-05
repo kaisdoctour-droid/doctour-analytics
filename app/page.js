@@ -618,7 +618,8 @@ export default function Dashboard() {
       if (d.STAGE_ID && (d.STAGE_ID.startsWith('C1:') || d.STAGE_ID.startsWith('C5:'))) return false;
       
       // Exclure les deals terminés (Won, Lose, Avance expirée)
-      if (d.STAGE_ID && (d.STAGE_ID.includes('WON') || d.STAGE_ID.includes('LOSE') || d.STAGE_ID.includes('APOLOGY'))) return false;
+      // Note: stage_id = '1' correspond à "Avance expirée" dans le pipeline DOCTOUR
+      if (d.STAGE_ID && (d.STAGE_ID.includes('WON') || d.STAGE_ID.includes('LOSE') || d.STAGE_ID.includes('APOLOGY') || d.STAGE_ID === '1')) return false;
       
       // Utiliser LAST_ACTIVITY_TIME (vrai dernier contact) si disponible, sinon DATE_MODIFY
       const lastContact = (d.LAST_ACTIVITY_TIME && d.LAST_ACTIVITY_TIME !== '') ? d.LAST_ACTIVITY_TIME : d.DATE_MODIFY;
