@@ -31,6 +31,7 @@ export default function Dashboard() {
   const [excludeWithReminder, setExcludeWithReminder] = useState(true);
   const [delaiRetard, setDelaiRetard] = useState(3); // Jours avant retard
   const [delaiCritique, setDelaiCritique] = useState(7); // Jours avant critique
+  const [delaiRelanceMax, setDelaiRelanceMax] = useState(7); // Exclure si relance dans les X jours
 
   // Onglet Aujourd'hui
   const [selectedDayDate, setSelectedDayDate] = useState(new Date().toISOString().slice(0, 10));
@@ -410,11 +411,15 @@ export default function Dashboard() {
     return users;
   }, [rawUsers]);
 
-  // ====== Identifier les leads avec relance planifiée ======
+  // ====== Identifier les leads avec relance planifiée dans les X jours ======
   const leadsWithPendingReminder = useMemo(() => {
     const leadIds = new Set();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    
+    // Date limite : aujourd'hui + delaiRelanceMax jours
+    const maxDate = new Date(today);
+    maxDate.setDate(maxDate.getDate() + delaiRelanceMax);
     
     rawActivities.forEach(a => {
       const isCompleted = a.COMPLETED === true || a.COMPLETED === 'true' || a.COMPLETED === 'Y';
@@ -424,20 +429,25 @@ export default function Dashboard() {
         const startTime = a.START_TIME ? new Date(a.START_TIME) : null;
         const activityDate = deadline || startTime;
         
-        if (!activityDate || activityDate >= today) {
+        // Relance valide si : dans le futur ET dans les X jours max
+        if (activityDate && activityDate >= today && activityDate <= maxDate) {
           leadIds.add(a.OWNER_ID);
         }
       }
     });
     
     return leadIds;
-  }, [rawActivities]);
+  }, [rawActivities, delaiRelanceMax]);
 
-  // ====== Identifier les deals avec relance planifiée ======
+  // ====== Identifier les deals avec relance planifiée dans les X jours ======
   const dealsWithPendingReminder = useMemo(() => {
     const dealIds = new Set();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    
+    // Date limite : aujourd'hui + delaiRelanceMax jours
+    const maxDate = new Date(today);
+    maxDate.setDate(maxDate.getDate() + delaiRelanceMax);
     
     rawActivities.forEach(a => {
       const isCompleted = a.COMPLETED === true || a.COMPLETED === 'true' || a.COMPLETED === 'Y';
@@ -448,14 +458,15 @@ export default function Dashboard() {
         const startTime = a.START_TIME ? new Date(a.START_TIME) : null;
         const activityDate = deadline || startTime;
         
-        if (!activityDate || activityDate >= today) {
+        // Relance valide si : dans le futur ET dans les X jours max
+        if (activityDate && activityDate >= today && activityDate <= maxDate) {
           dealIds.add(a.OWNER_ID);
         }
       }
     });
     
     return dealIds;
-  }, [rawActivities]);
+  }, [rawActivities, delaiRelanceMax]);
 
   const leadStats = useMemo(() => {
     const total = filteredLeads.length;
@@ -2400,6 +2411,20 @@ DOCTOUR Analytics`);
                   />
                   <span className="text-sm text-slate-300">Exclure si relance planifiée</span>
                 </label>
+                {excludeWithReminder && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-slate-400">dans les</label>
+                    <select 
+                      value={delaiRelanceMax} 
+                      onChange={(e) => setDelaiRelanceMax(parseInt(e.target.value))}
+                      className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm"
+                    >
+                      {[3, 5, 7, 10, 14, 21, 30].map(j => (
+                        <option key={j} value={j}>{j} jours</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {rawActivities.length === 0 && (
                   <span className="text-xs text-amber-400">⚠️ Aucune activité synchronisée</span>
                 )}
