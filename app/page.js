@@ -41,38 +41,40 @@ export default function Dashboard() {
   const [rawQuotes, setRawQuotes] = useState([]);
   const [rawSources, setRawSources] = useState({});
   const [rawActivities, setRawActivities] = useState([]);
+  const [activitiesLoading, setActivitiesLoading] = useState(true);
 
+  // ========== PHASE 1 : Chargement rapide (Users, Sources, Leads, Deals, Quotes) ==========
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     setApiStatus('connecting');
     try {
-      const usersRes = await fetch('/api/users');
-      const usersData = await usersRes.json();
+      // Charger les 5 endpoints légers EN PARALLÈLE
+      const [usersRes, sourcesRes, leadsRes, dealsRes, quotesRes] = await Promise.all([
+        fetch('/api/users'),
+        fetch('/api/sources'),
+        fetch('/api/leads'),
+        fetch('/api/deals'),
+        fetch('/api/quotes')
+      ]);
+      
+      const [usersData, sourcesData, leadsData, dealsData, quotesData] = await Promise.all([
+        usersRes.json(),
+        sourcesRes.json(),
+        leadsRes.json(),
+        dealsRes.json(),
+        quotesRes.json()
+      ]);
+      
       if (!usersData.success) throw new Error('Erreur utilisateurs');
-      setRawUsers(usersData.data || []);
-      
-      const sourcesRes = await fetch('/api/sources');
-      const sourcesData = await sourcesRes.json();
-      setRawSources(sourcesData.data || {});
-      
-      const leadsRes = await fetch('/api/leads');
-      const leadsData = await leadsRes.json();
       if (!leadsData.success) throw new Error('Erreur leads: ' + (leadsData.error || 'inconnu'));
-      setRawLeads(leadsData.data || []);
-      
-      const dealsRes = await fetch('/api/deals');
-      const dealsData = await dealsRes.json();
       if (!dealsData.success) throw new Error('Erreur deals');
+      
+      setRawUsers(usersData.data || []);
+      setRawSources(sourcesData.data || {});
+      setRawLeads(leadsData.data || []);
       setRawDeals(dealsData.data || []);
-      
-      const quotesRes = await fetch('/api/quotes');
-      const quotesData = await quotesRes.json();
       setRawQuotes(quotesData.data || []);
-      
-      const activitiesRes = await fetch('/api/activities');
-      const activitiesData = await activitiesRes.json();
-      setRawActivities(activitiesData.data || []);
       
       setApiStatus('live');
       setLastUpdate(new Date());
@@ -84,7 +86,27 @@ export default function Dashboard() {
     }
   }, []);
 
+  // ========== PHASE 2 : Chargement activités en arrière-plan ==========
+  const loadActivities = useCallback(async () => {
+    setActivitiesLoading(true);
+    try {
+      const activitiesRes = await fetch('/api/activities');
+      const activitiesData = await activitiesRes.json();
+      setRawActivities(activitiesData.data || []);
+    } catch (err) {
+      console.error('Erreur chargement activités:', err);
+    } finally {
+      setActivitiesLoading(false);
+    }
+  }, []);
+
+  // Lancer Phase 1, puis Phase 2 automatiquement
   useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { 
+    if (!loading && apiStatus === 'live') {
+      loadActivities(); 
+    }
+  }, [loading, apiStatus, loadActivities]);
 
   // Helper pour savoir si une sync est en cours
   const isAnySyncRunning = syncingRapide || syncingActivites || syncingDevis || syncing;
@@ -1664,9 +1686,9 @@ DOCTOUR Analytics`);
     { id: 'mensuel', label: 'Mensuel', icon: '📆' },
     { id: 'chauds', label: 'Chauds', icon: '🔥', badge: hotDealsStats.totals.enDanger > 0 ? hotDealsStats.totals.enDanger : null },
     { id: 'delais', label: 'Delais', icon: '⏱️' },
-    { id: 'alerts', label: 'Alertes', icon: '🚨', badge: alertsLeads.total + alertsDeals.total },
-    { id: 'qualite', label: 'Qualité', icon: '🔍', badge: qualityStats.dealsWithoutLead.won + qualityStats.dealsWithoutLead.inProgress + qualityStats.dealsWithoutActivity.length + qualityStats.leadsWithoutActivity.length + qualityStats.leadsOrphelins.length + qualityStats.dealsOrphelins.length },
-    { id: 'allocation', label: 'Allocation', icon: '🎯' }
+    { id: 'alerts', label: 'Alertes', icon: '🚨', badge: activitiesLoading ? '⏳' : (alertsLeads.total + alertsDeals.total) },
+    { id: 'qualite', label: 'Qualité', icon: '🔍', badge: activitiesLoading ? '⏳' : (qualityStats.dealsWithoutLead.won + qualityStats.dealsWithoutLead.inProgress + qualityStats.dealsWithoutActivity.length + qualityStats.leadsWithoutActivity.length + qualityStats.leadsOrphelins.length + qualityStats.dealsOrphelins.length) },
+    { id: 'allocation', label: 'Allocation', icon: '🎯', badge: activitiesLoading ? '⏳' : null }
   ];
 
   if (loading) {
@@ -1706,6 +1728,11 @@ DOCTOUR Analytics`);
               {formatNumber(filteredLeads.length)} leads • {formatNumber(filteredDeals.length)} deals • {formatNumber(rawActivities.length)} activités
               {lastUpdate && ` • MAJ: ${formatDateTime(lastUpdate)}`}
             </p>
+            {activitiesLoading && (
+              <p className="text-amber-400 text-xs flex items-center gap-1 animate-pulse">
+                ⏳ Chargement des activités en cours...
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <DateRangePicker presets={PERIOD_PRESETS} selectedPreset={selectedPeriod} onPresetChange={setSelectedPeriod} startDate={customStartDate} endDate={customEndDate} onStartChange={setCustomStartDate} onEndChange={setCustomEndDate} />
@@ -2090,6 +2117,12 @@ DOCTOUR Analytics`);
 
         {activeTab === 'alerts' && (
           <div className="space-y-4">
+            {activitiesLoading && (
+              <div className="bg-amber-500/20 border border-amber-500/50 rounded-lg p-3 text-amber-300 text-sm flex items-center gap-2">
+                <span className="animate-spin">⏳</span>
+                Les activités sont en cours de chargement. Les alertes seront mises à jour dans quelques secondes...
+              </div>
+            )}
             {/* Paramètres des alertes */}
             <Card title="⚙️ Paramètres des alertes">
               <div className="flex flex-wrap items-center gap-4">
@@ -2377,6 +2410,12 @@ DOCTOUR Analytics`);
         {/* Onglet Qualité */}
         {activeTab === 'qualite' && (
           <div className="space-y-4">
+            {activitiesLoading && (
+              <div className="bg-amber-500/20 border border-amber-500/50 rounded-lg p-3 text-amber-300 text-sm flex items-center gap-2">
+                <span className="animate-spin">⏳</span>
+                Les activités sont en cours de chargement. Les données qualité seront complètes dans quelques secondes...
+              </div>
+            )}
             {/* KPIs Qualité */}
             <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
               <KpiCard icon="⚠️" label="Deals sans lead" value={qualityStats.dealsWithoutLead.total} subtext="Total orphelins" color="orange" />
@@ -2673,6 +2712,12 @@ DOCTOUR Analytics`);
         {/* Onglet Allocation */}
         {activeTab === 'allocation' && (
           <div className="space-y-4">
+            {activitiesLoading && (
+              <div className="bg-amber-500/20 border border-amber-500/50 rounded-lg p-3 text-amber-300 text-sm flex items-center gap-2">
+                <span className="animate-spin">⏳</span>
+                Les activités sont en cours de chargement. Les scores d'allocation seront calculés dans quelques secondes...
+              </div>
+            )}
             {/* KPIs Budget */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <KpiCard icon="👥" label="Commerciaux actifs" value={allocationStats.commerciaux.length} subtext={`${allocationStats.repartition.prioritaire.length} prioritaires`} color="blue" />
