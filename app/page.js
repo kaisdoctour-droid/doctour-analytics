@@ -39,6 +39,8 @@ export default function Dashboard() {
   // Sous-onglet Commerciaux
   const [commerciauxSubTab, setCommerciauxSubTab] = useState('performance'); // 'performance' ou 'productivite'
   const [productivitePeriod, setProductivitePeriod] = useState('7'); // '1', '7', '30' jours
+  const [showProductiviteDetail, setShowProductiviteDetail] = useState(false);
+  const [selectedProductiviteCommercial, setSelectedProductiviteCommercial] = useState(null);
 
   const [rawLeads, setRawLeads] = useState([]);
   const [rawDeals, setRawDeals] = useState([]);
@@ -1854,6 +1856,36 @@ export default function Dashboard() {
       const appelsParJour = joursOuvres > 0 ? appels.length / joursOuvres : 0;
       const emailsParJour = joursOuvres > 0 ? emails.length / joursOuvres : 0;
       
+      // Historique jour par jour pour ce commercial
+      const historiqueCommercial = [];
+      for (let i = 0; i < periodDays; i++) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        const dateStr = d.toISOString().slice(0, 10);
+        const dow = d.getDay();
+        const isWeekend = dow === 0 || dow === 6;
+        
+        const dayActivities = userActivities.filter(a => a.CREATED && a.CREATED.slice(0, 10) === dateStr);
+        const dayFiches = new Set();
+        dayActivities.forEach(a => dayFiches.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
+        const dayAppels = dayActivities.filter(a => a.TYPE_ID === '2' || a.TYPE_ID === 2);
+        const dayEmails = dayActivities.filter(a => a.TYPE_ID === '4' || a.TYPE_ID === 4);
+        
+        historiqueCommercial.push({
+          date: dateStr,
+          jour: d.toLocaleDateString('fr-FR', { weekday: 'short' }),
+          jourComplet: d.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: '2-digit' }),
+          isWeekend,
+          activites: dayActivities.length,
+          fiches: dayFiches.size,
+          appels: dayAppels.length,
+          appelsSortants: dayAppels.filter(a => a.DIRECTION === '2' || a.DIRECTION === 2).length,
+          appelsEntrants: dayAppels.filter(a => a.DIRECTION === '1' || a.DIRECTION === 1).length,
+          emails: dayEmails.length
+        });
+      }
+      historiqueCommercial.reverse(); // Du plus ancien au plus récent
+      
       results.push({
         id: userId,
         name,
@@ -1871,6 +1903,8 @@ export default function Dashboard() {
         fichesParJour: Math.round(fichesParJour * 10) / 10,
         appelsParJour: Math.round(appelsParJour * 10) / 10,
         emailsParJour: Math.round(emailsParJour * 10) / 10,
+        // Historique jour par jour
+        historique: historiqueCommercial,
         // Score productivité (sur 100)
         score: Math.min(100, Math.round(
           (Math.min(fichesParJour / 15, 1) * 40) + // Fiches/jour (max 15 = 40 pts)
@@ -2299,6 +2333,7 @@ DOCTOUR Analytics`);
                         <th className="p-2 text-right" title="Emails envoyés">📧 Emails</th>
                         <th className="p-2 text-right" title="RDV réalisés">📅 RDV</th>
                         <th className="p-2 text-right" title="1ers contacts sur nouveaux leads">🆕 1er</th>
+                        <th className="p-2 text-center">Détails</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2325,6 +2360,14 @@ DOCTOUR Analytics`);
                           <td className="p-2 text-right font-mono text-blue-400">{c.emails}</td>
                           <td className="p-2 text-right font-mono text-pink-400">{c.rdv}</td>
                           <td className="p-2 text-right font-mono text-yellow-400">{c.premiersContacts}</td>
+                          <td className="p-2 text-center">
+                            <button
+                              onClick={() => { setSelectedProductiviteCommercial(c); setShowProductiviteDetail(true); }}
+                              className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 rounded text-slate-300"
+                            >
+                              📊 Voir
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -2779,6 +2822,85 @@ DOCTOUR Analytics`);
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+        </Modal>
+
+        {/* Modal Détail Productivité */}
+        <Modal isOpen={showProductiviteDetail} onClose={() => setShowProductiviteDetail(false)} title={`📊 Détail Productivité - ${selectedProductiviteCommercial?.name || ''}`} size="xl">
+          {selectedProductiviteCommercial && (
+            <div className="space-y-4">
+              {/* Résumé */}
+              <div className="grid grid-cols-4 gap-3">
+                <div className="bg-slate-800 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-purple-400">{selectedProductiviteCommercial.score}</div>
+                  <div className="text-xs text-slate-400">Score</div>
+                </div>
+                <div className="bg-slate-800 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-blue-400">{selectedProductiviteCommercial.fichesTouchees}</div>
+                  <div className="text-xs text-slate-400">Fiches touchées</div>
+                </div>
+                <div className="bg-slate-800 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-emerald-400">{selectedProductiviteCommercial.appels}</div>
+                  <div className="text-xs text-slate-400">Appels</div>
+                </div>
+                <div className="bg-slate-800 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-cyan-400">{selectedProductiviteCommercial.emails}</div>
+                  <div className="text-xs text-slate-400">Emails</div>
+                </div>
+              </div>
+
+              {/* Tableau jour par jour */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700 text-slate-400">
+                      <th className="p-2 text-left">Date</th>
+                      <th className="p-2 text-left">Jour</th>
+                      <th className="p-2 text-right">Activités</th>
+                      <th className="p-2 text-right">Fiches</th>
+                      <th className="p-2 text-right">Appels</th>
+                      <th className="p-2 text-right">↗️ Sort.</th>
+                      <th className="p-2 text-right">↙️ Entr.</th>
+                      <th className="p-2 text-right">Emails</th>
+                      <th className="p-2 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedProductiviteCommercial.historique?.map((jour, idx) => {
+                      const isLow = !jour.isWeekend && jour.activites < 50;
+                      const isVeryLow = !jour.isWeekend && jour.activites < 20;
+                      const isGood = !jour.isWeekend && jour.activites >= 80;
+                      return (
+                        <tr key={idx} className={`border-b border-slate-800 ${jour.isWeekend ? 'opacity-50' : ''} ${isVeryLow ? 'bg-red-500/10' : isLow ? 'bg-yellow-500/10' : isGood ? 'bg-green-500/5' : ''}`}>
+                          <td className="p-2 font-mono text-slate-300">{jour.date.slice(5)}</td>
+                          <td className="p-2">{jour.jourComplet}</td>
+                          <td className="p-2 text-right font-mono font-bold">{jour.activites}</td>
+                          <td className="p-2 text-right font-mono text-blue-400">{jour.fiches}</td>
+                          <td className="p-2 text-right font-mono text-emerald-400">{jour.appels}</td>
+                          <td className="p-2 text-right font-mono text-cyan-400">{jour.appelsSortants}</td>
+                          <td className="p-2 text-right font-mono text-slate-400">{jour.appelsEntrants}</td>
+                          <td className="p-2 text-right font-mono text-blue-400">{jour.emails}</td>
+                          <td className="p-2 text-center">
+                            {jour.isWeekend ? <span className="text-slate-500">Weekend</span> :
+                             isVeryLow ? <Badge color="red" size="xs">🔴 Très faible</Badge> :
+                             isLow ? <Badge color="yellow" size="xs">⚠️ Faible</Badge> :
+                             isGood ? <Badge color="green" size="xs">✅ Bon</Badge> :
+                             <span className="text-slate-400">Normal</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Légende */}
+              <div className="flex gap-4 text-xs text-slate-500">
+                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-green-500/20 rounded"></span> ≥80 activités = Bon</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-yellow-500/20 rounded"></span> 20-50 activités = Faible</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-red-500/20 rounded"></span> &lt;20 activités = Très faible</span>
               </div>
             </div>
           )}
