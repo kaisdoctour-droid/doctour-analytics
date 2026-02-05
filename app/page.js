@@ -2858,7 +2858,6 @@ DOCTOUR Analytics`);
                     <tr className="border-b border-slate-700 text-slate-400">
                       <th className="p-2 text-left">Date</th>
                       <th className="p-2 text-left">Jour</th>
-                      <th className="p-2 text-right">Activités</th>
                       <th className="p-2 text-right">Fiches</th>
                       <th className="p-2 text-right">Appels</th>
                       <th className="p-2 text-right">↗️ Sort.</th>
@@ -2869,15 +2868,14 @@ DOCTOUR Analytics`);
                   </thead>
                   <tbody>
                     {selectedProductiviteCommercial.historique?.map((jour, idx) => {
-                      const isLow = !jour.isWeekend && jour.activites < 50;
-                      const isVeryLow = !jour.isWeekend && jour.activites < 20;
-                      const isGood = !jour.isWeekend && jour.activites >= 80;
+                      const isGood = !jour.isWeekend && jour.fiches >= 40;
+                      const isLow = !jour.isWeekend && jour.fiches >= 20 && jour.fiches < 40;
+                      const isVeryLow = !jour.isWeekend && jour.fiches < 20;
                       return (
                         <tr key={idx} className={`border-b border-slate-800 ${jour.isWeekend ? 'opacity-50' : ''} ${isVeryLow ? 'bg-red-500/10' : isLow ? 'bg-yellow-500/10' : isGood ? 'bg-green-500/5' : ''}`}>
                           <td className="p-2 font-mono text-slate-300">{jour.date.slice(5)}</td>
                           <td className="p-2">{jour.jourComplet}</td>
-                          <td className="p-2 text-right font-mono font-bold">{jour.activites}</td>
-                          <td className="p-2 text-right font-mono text-blue-400">{jour.fiches}</td>
+                          <td className="p-2 text-right font-mono font-bold text-blue-400">{jour.fiches}</td>
                           <td className="p-2 text-right font-mono text-emerald-400">{jour.appels}</td>
                           <td className="p-2 text-right font-mono text-cyan-400">{jour.appelsSortants}</td>
                           <td className="p-2 text-right font-mono text-slate-400">{jour.appelsEntrants}</td>
@@ -2898,9 +2896,9 @@ DOCTOUR Analytics`);
 
               {/* Légende */}
               <div className="flex gap-4 text-xs text-slate-500">
-                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-green-500/20 rounded"></span> ≥80 activités = Bon</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-yellow-500/20 rounded"></span> 20-50 activités = Faible</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-red-500/20 rounded"></span> &lt;20 activités = Très faible</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-green-500/20 rounded"></span> ≥40 fiches = Bon</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-yellow-500/20 rounded"></span> 20-40 fiches = Faible</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-red-500/20 rounded"></span> &lt;20 fiches = Très faible</span>
               </div>
             </div>
           )}
