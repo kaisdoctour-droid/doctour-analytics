@@ -1427,13 +1427,9 @@ export default function Dashboard() {
     const caWonToday = wonToday.reduce((sum, d) => sum + parseFloat(d.OPPORTUNITY || 0), 0);
     
     // PRÉVU - Activités planifiées pour ce jour
-    // EXCLURE les to-do automatiques "Contacter le client" (PROVIDER_ID = CRM_TODO)
-    const activitiesPlanned = rawActivities.filter(a => {
-      if (!isSameDay(a.DEADLINE, dateStr)) return false;
-      // Exclure les to-do automatiques
-      if (a.PROVIDER_ID === 'CRM_TODO') return false;
-      return true;
-    });
+    // On garde les CRM_TODO ici car elles représentent quand même une relance à faire
+    // (on les exclut seulement du compteur "travail réel")
+    const activitiesPlanned = rawActivities.filter(a => isSameDay(a.DEADLINE, dateStr));
     
     // Fonction pour vérifier si une activité prévue est "effectivement faite"
     // = completed OU une nouvelle activité a été créée sur ce lead/deal ce jour
@@ -1482,6 +1478,12 @@ export default function Dashboard() {
       // Activités créées par ce commercial aujourd'hui = TRAVAIL RÉEL
       const userActivitiesCreated = activitiesCreatedToday.filter(a => a.RESPONSIBLE_ID === userId);
       
+      // PATIENTS TRAVAILLÉS = dédoublonné par patient (OWNER_ID)
+      const patientsTravailles = new Set();
+      userActivitiesCreated.forEach(a => {
+        patientsTravailles.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`);
+      });
+      
       // Détail par type d'activité avec séparation entrant/sortant
       // DIRECTION: 1 = entrant, 2 = sortant
       const userAppelsOut = userActivitiesCreated.filter(a => a.TYPE_ID === '2' && a.DIRECTION === '2').length;
@@ -1505,16 +1507,24 @@ export default function Dashboard() {
       const userWon = wonToday.filter(d => d.ASSIGNED_BY_ID === userId);
       const userCA = userWon.reduce((sum, d) => sum + parseFloat(d.OPPORTUNITY || 0), 0);
       
-      // Activités prévues
+      // Activités prévues - DÉDOUBLONNER par patient
       const userActivitiesPlanned = activitiesPlanned.filter(a => a.RESPONSIBLE_ID === userId);
+      const patientsPlanned = new Set();
+      userActivitiesPlanned.forEach(a => patientsPlanned.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
+      
       const userActivitiesDone = userActivitiesPlanned.filter(a => isActivityEffectivelyDone(a));
+      const patientsDone = new Set();
+      userActivitiesDone.forEach(a => patientsDone.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
+      
       const userActivitiesPending = userActivitiesPlanned.filter(a => !isActivityEffectivelyDone(a));
+      const patientsPending = new Set();
+      userActivitiesPending.forEach(a => patientsPending.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
       
       byCommercial[userId] = {
         id: userId,
         name,
-        // TRAVAIL RÉEL = activités créées
-        activitiesCreated: userActivitiesCreated.length,
+        // PATIENTS TRAVAILLÉS = dédoublonné par patient
+        patientsTravailles: patientsTravailles.size,
         appels: userAppels,
         appelsOut: userAppelsOut,
         appelsIn: userAppelsIn,
@@ -1528,10 +1538,10 @@ export default function Dashboard() {
         dealsCreated: userDealsCreated.length,
         won: userWon.length,
         ca: userCA,
-        // Prévisions
-        activitiesPlanned: userActivitiesPlanned.length,
-        activitiesDone: userActivitiesDone.length,
-        activitiesPending: userActivitiesPending.length,
+        // Prévisions - DÉDOUBLONNÉ par patient
+        patientsPlanned: patientsPlanned.size,
+        patientsDone: patientsDone.size,
+        patientsPending: patientsPending.size,
         // DÉDOUBLONNER les relances par patient (OWNER_ID unique)
         pendingList: (() => {
           const seenOwners = new Set();
@@ -1589,10 +1599,23 @@ export default function Dashboard() {
       };
     }).sort((a, b) => a.commercial.localeCompare(b.commercial));
     
+    // Calcul des totaux dédoublonnés
+    const totalPatientsTravailles = new Set();
+    activitiesCreatedToday.forEach(a => totalPatientsTravailles.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
+    
+    const totalPatientsPlanned = new Set();
+    activitiesPlanned.forEach(a => totalPatientsPlanned.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
+    
+    const totalPatientsDone = new Set();
+    activitiesPlannedDone.forEach(a => totalPatientsDone.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
+    
+    const totalPatientsPending = new Set();
+    activitiesPlannedPending.forEach(a => totalPatientsPending.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
+    
     return {
       date: dateStr,
       realized: {
-        activitiesCreated: activitiesCreatedToday.length,
+        patientsTravailles: totalPatientsTravailles.size,
         leadsCreated: leadsCreated.length,
         dealsCreated: dealsCreated.length,
         won: wonToday.length,
@@ -1600,13 +1623,13 @@ export default function Dashboard() {
         caWon: caWonToday
       },
       planned: {
-        total: activitiesPlanned.length,
-        done: activitiesPlannedDone.length,
-        pending: activitiesPlannedPending.length,
+        total: totalPatientsPlanned.size,
+        done: totalPatientsDone.size,
+        pending: totalPatientsPending.size,
         pendingList: pendingActivitiesList
       },
       byCommercial: Object.values(byCommercial).sort((a, b) => 
-        b.activitiesCreated - a.activitiesCreated
+        b.patientsTravailles - a.patientsTravailles
       )
     };
   }, [selectedDayDate, rawLeads, rawDeals, rawActivities, getUserName]);
@@ -1633,14 +1656,11 @@ export default function Dashboard() {
     const lastDay = days[0];
     
     // Activités prévues sur la période (deadline dans les 7 derniers jours ouvrés)
-    // EXCLURE les to-do automatiques "Contacter le client"
+    // On garde les CRM_TODO car elles représentent des relances à faire
     const plannedActivities = rawActivities.filter(a => {
       if (!a.DEADLINE) return false;
       const dl = a.DEADLINE.slice(0, 10);
-      if (dl < firstDay || dl > lastDay) return false;
-      // Exclure les to-do automatiques
-      if (a.PROVIDER_ID === 'CRM_TODO') return false;
-      return true;
+      return dl >= firstDay && dl <= lastDay;
     });
     
     // Activités créées sur la période (EXCLURE les to-do automatiques)
@@ -2533,7 +2553,7 @@ DOCTOUR Analytics`);
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <Card title="✅ Travail réel" className="col-span-2">
                 <div className="grid grid-cols-4 gap-2">
-                  <KpiCard icon="📞" label="Activités créées" value={dailyStats.realized.activitiesCreated} color="blue" small />
+                  <KpiCard icon="👥" label="Patients traités" value={dailyStats.realized.patientsTravailles} color="blue" small />
                   <KpiCard icon="➕" label="Nouveaux leads" value={dailyStats.realized.leadsCreated} color="cyan" small />
                   <KpiCard icon="🔄" label="Conversions" value={dailyStats.realized.dealsCreated} color="purple" small />
                   <KpiCard icon="🏆" label="Won" value={dailyStats.realized.won} subtext={formatCurrency(dailyStats.realized.caWon)} color="green" small />
@@ -2541,8 +2561,8 @@ DOCTOUR Analytics`);
               </Card>
               <Card title="📋 Prévu" className="col-span-2">
                 <div className="grid grid-cols-3 gap-2">
-                  <KpiCard icon="📅" label="Relances prévues" value={dailyStats.planned.total} color="blue" small />
-                  <KpiCard icon="✅" label="Traitées" value={dailyStats.planned.done} color="green" small />
+                  <KpiCard icon="📅" label="Patients à relancer" value={dailyStats.planned.total} color="blue" small />
+                  <KpiCard icon="✅" label="Traités" value={dailyStats.planned.done} color="green" small />
                   <KpiCard icon="⚠️" label="En attente" value={dailyStats.planned.pending} color={dailyStats.planned.pending > 0 ? 'red' : 'green'} small />
                 </div>
               </Card>
@@ -2555,7 +2575,7 @@ DOCTOUR Analytics`);
                   <thead>
                     <tr className="border-b border-slate-700 text-slate-400">
                       <th className="p-2 text-left">Commercial</th>
-                      <th className="p-2 text-right">📞 Activités</th>
+                      <th className="p-2 text-right" title="Patients travaillés (dédoublonné)">👥 Patients</th>
                       <th className="p-2 text-right" title="Appels sortants">📱↗️ Out</th>
                       <th className="p-2 text-right" title="Appels entrants">📱↙️ In</th>
                       <th className="p-2 text-right" title="Emails envoyés">📧↗️ Out</th>
@@ -2564,15 +2584,15 @@ DOCTOUR Analytics`);
                       <th className="p-2 text-right">🔄 Conv.</th>
                       <th className="p-2 text-right">🏆 Won</th>
                       <th className="p-2 text-right">💰 CA</th>
-                      <th className="p-2 text-right">📋 Prévues</th>
-                      <th className="p-2 text-right">⚠️ Attente</th>
+                      <th className="p-2 text-right" title="Patients à relancer (dédoublonné)">📋 Prévus</th>
+                      <th className="p-2 text-right" title="Patients en attente (dédoublonné)">⚠️ Attente</th>
                     </tr>
                   </thead>
                   <tbody>
                     {dailyStats.byCommercial.length > 0 ? dailyStats.byCommercial.map(c => (
                       <tr key={c.id} className="border-b border-slate-800 hover:bg-slate-700/30">
                         <td className="p-2 font-medium">{c.name}</td>
-                        <td className="p-2 text-right">{c.activitiesCreated > 0 ? <Badge color="blue">{c.activitiesCreated}</Badge> : <span className="text-slate-500">0</span>}</td>
+                        <td className="p-2 text-right">{c.patientsTravailles > 0 ? <Badge color="blue">{c.patientsTravailles}</Badge> : <span className="text-slate-500">0</span>}</td>
                         <td className="p-2 text-right">{c.appelsOut > 0 ? <Badge color="green">{c.appelsOut}</Badge> : <span className="text-slate-500">0</span>}</td>
                         <td className="p-2 text-right">{c.appelsIn > 0 ? <Badge color="emerald">{c.appelsIn}</Badge> : <span className="text-slate-500">0</span>}</td>
                         <td className="p-2 text-right">{c.emailsOut > 0 ? <Badge color="cyan">{c.emailsOut}</Badge> : <span className="text-slate-500">0</span>}</td>
@@ -2581,8 +2601,8 @@ DOCTOUR Analytics`);
                         <td className="p-2 text-right">{c.dealsCreated > 0 ? <Badge color="orange">{c.dealsCreated}</Badge> : <span className="text-slate-500">0</span>}</td>
                         <td className="p-2 text-right">{c.won > 0 ? <Badge color="green">{c.won}</Badge> : <span className="text-slate-500">0</span>}</td>
                         <td className="p-2 text-right font-mono text-cyan-400">{c.ca > 0 ? formatCurrency(c.ca) : '-'}</td>
-                        <td className="p-2 text-right">{c.activitiesPlanned > 0 ? c.activitiesPlanned : <span className="text-slate-500">0</span>}</td>
-                        <td className="p-2 text-right">{c.activitiesPending > 0 ? <Badge color="red">{c.activitiesPending}</Badge> : <span className="text-emerald-400">✓</span>}</td>
+                        <td className="p-2 text-right">{c.patientsPlanned > 0 ? c.patientsPlanned : <span className="text-slate-500">0</span>}</td>
+                        <td className="p-2 text-right">{c.patientsPending > 0 ? <Badge color="red">{c.patientsPending}</Badge> : <span className="text-emerald-400">✓</span>}</td>
                       </tr>
                     )) : (
                       <tr><td colSpan="12" className="p-4 text-center text-slate-500">Aucune activité pour cette date</td></tr>
@@ -2592,10 +2612,10 @@ DOCTOUR Analytics`);
               </div>
             </Card>
 
-            {/* Activités en retard */}
+            {/* Patients en attente */}
             {dailyStats.planned.pending > 0 && (
-              <Card title={`⚠️ Relances en attente (${dailyStats.planned.pending})`} icon="🚨">
-                <p className="text-amber-400 text-sm mb-3">Ces relances étaient planifiées pour le {formatDate(selectedDayDate)} mais n'ont pas encore été traitées</p>
+              <Card title={`⚠️ Patients en attente (${dailyStats.planned.pending})`} icon="🚨">
+                <p className="text-amber-400 text-sm mb-3">Ces patients devaient être relancés le {formatDate(selectedDayDate)} mais n'ont pas encore été traités</p>
                 <div className="overflow-x-auto max-h-80">
                   <table className="w-full text-sm">
                     <thead>
