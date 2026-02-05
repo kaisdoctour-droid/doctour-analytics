@@ -542,7 +542,7 @@ export default function Dashboard() {
       if (['CONVERTED', 'JUNK'].includes(l.STATUS_ID)) return false;
       
       // Utiliser LAST_ACTIVITY_TIME (vrai dernier contact) si disponible, sinon DATE_MODIFY
-      const lastContact = l.LAST_ACTIVITY_TIME || l.DATE_MODIFY;
+      const lastContact = (l.LAST_ACTIVITY_TIME && l.LAST_ACTIVITY_TIME !== '') ? l.LAST_ACTIVITY_TIME : l.DATE_MODIFY;
       
       // Vérifier si le lead est en retard
       const isStale = daysAgo(lastContact) > delaiRetard;
@@ -574,7 +574,7 @@ export default function Dashboard() {
       byCommercial[id].count++;
       
       const hasReminder = leadsWithPendingReminder.has(l.ID);
-      const lastContact = l.LAST_ACTIVITY_TIME || l.DATE_MODIFY;
+      const lastContact = (l.LAST_ACTIVITY_TIME && l.LAST_ACTIVITY_TIME !== '') ? l.LAST_ACTIVITY_TIME : l.DATE_MODIFY;
       
       byCommercial[id].leads.push({
         id: l.ID, title: l.TITLE || l.NAME || 'Sans nom', status: LEAD_STATUS_MAP[l.STATUS_ID] || l.STATUS_ID,
@@ -591,14 +591,14 @@ export default function Dashboard() {
     });
     
     const critical = staleLeads.filter(l => {
-      const lastContact = l.LAST_ACTIVITY_TIME || l.DATE_MODIFY;
+      const lastContact = (l.LAST_ACTIVITY_TIME && l.LAST_ACTIVITY_TIME !== '') ? l.LAST_ACTIVITY_TIME : l.DATE_MODIFY;
       return daysAgo(lastContact) > delaiCritique;
     }).length;
     
     // Compter les leads exclus car ils ont une relance
     const excludedByReminder = rawLeads.filter(l => {
       if (['CONVERTED', 'JUNK'].includes(l.STATUS_ID)) return false;
-      const lastContact = l.LAST_ACTIVITY_TIME || l.DATE_MODIFY;
+      const lastContact = (l.LAST_ACTIVITY_TIME && l.LAST_ACTIVITY_TIME !== '') ? l.LAST_ACTIVITY_TIME : l.DATE_MODIFY;
       if (daysAgo(lastContact) <= delaiRetard) return false;
       return leadsWithPendingReminder.has(l.ID);
     }).length;
@@ -617,7 +617,7 @@ export default function Dashboard() {
       if (d.STAGE_ID && (d.STAGE_ID.includes('WON') || d.STAGE_ID.includes('LOSE') || d.STAGE_ID.includes('APOLOGY'))) return false;
       
       // Utiliser LAST_ACTIVITY_TIME (vrai dernier contact) si disponible, sinon DATE_MODIFY
-      const lastContact = d.LAST_ACTIVITY_TIME || d.DATE_MODIFY;
+      const lastContact = (d.LAST_ACTIVITY_TIME && d.LAST_ACTIVITY_TIME !== '') ? d.LAST_ACTIVITY_TIME : d.DATE_MODIFY;
       
       // Vérifier si le deal est en retard
       const isStale = daysAgo(lastContact) > delaiRetard;
@@ -649,7 +649,7 @@ export default function Dashboard() {
       byCommercial[id].count++;
       
       const hasReminder = dealsWithPendingReminder.has(d.ID);
-      const lastContact = d.LAST_ACTIVITY_TIME || d.DATE_MODIFY;
+      const lastContact = (d.LAST_ACTIVITY_TIME && d.LAST_ACTIVITY_TIME !== '') ? d.LAST_ACTIVITY_TIME : d.DATE_MODIFY;
       
       byCommercial[id].deals.push({
         id: d.ID, title: d.TITLE || 'Sans nom', stage: DEAL_STAGE_MAP[d.STAGE_ID] || d.STAGE_ID,
@@ -665,7 +665,7 @@ export default function Dashboard() {
     });
     
     const critical = staleDeals.filter(d => {
-      const lastContact = d.LAST_ACTIVITY_TIME || d.DATE_MODIFY;
+      const lastContact = (d.LAST_ACTIVITY_TIME && d.LAST_ACTIVITY_TIME !== '') ? d.LAST_ACTIVITY_TIME : d.DATE_MODIFY;
       return daysAgo(lastContact) > delaiCritique;
     }).length;
     
@@ -673,7 +673,7 @@ export default function Dashboard() {
     const excludedByReminder = rawDeals.filter(d => {
       if (d.STAGE_ID && (d.STAGE_ID.startsWith('C1:') || d.STAGE_ID.startsWith('C5:'))) return false;
       if (d.STAGE_ID && (d.STAGE_ID.includes('WON') || d.STAGE_ID.includes('LOSE') || d.STAGE_ID.includes('APOLOGY'))) return false;
-      const lastContact = d.LAST_ACTIVITY_TIME || d.DATE_MODIFY;
+      const lastContact = (d.LAST_ACTIVITY_TIME && d.LAST_ACTIVITY_TIME !== '') ? d.LAST_ACTIVITY_TIME : d.DATE_MODIFY;
       if (daysAgo(lastContact) <= delaiRetard) return false;
       return dealsWithPendingReminder.has(d.ID);
     }).length;
@@ -1287,7 +1287,10 @@ export default function Dashboard() {
         l.STATUS_ID && l.STATUS_ID !== 'CONVERTED' && l.STATUS_ID !== 'JUNK'
       );
       const leadsEnRetard = leadsEnCours.filter(l => {
-        const lastActivity = l.LAST_ACTIVITY_TIME || l.DATE_MODIFY;
+        // Utiliser LAST_ACTIVITY_TIME si valide, sinon DATE_MODIFY
+        const lastActivity = (l.LAST_ACTIVITY_TIME && l.LAST_ACTIVITY_TIME !== '') 
+          ? l.LAST_ACTIVITY_TIME 
+          : l.DATE_MODIFY;
         if (!lastActivity) return true;
         const days = (now - new Date(lastActivity)) / (1000 * 60 * 60 * 24);
         return days > 3;
@@ -1307,13 +1310,16 @@ export default function Dashboard() {
       // Score gaspillage (15 pts max)
       const scoreGaspillage = Math.max(0, 15 - (pctJamaisContactes * 0.3));
       
-      // === 5. FICHES TOUCHÉES PAR JOUR ===
+      // === 5. FICHES TOUCHÉES PAR JOUR (dédoublonné par patient) ===
       const activitesRecentes = rawActivities.filter(a => 
         a.RESPONSIBLE_ID === commercialId &&
         a.CREATED && new Date(a.CREATED) >= sixtyDaysAgo
       );
+      // Dédoublonner par patient (OWNER_TYPE_ID + OWNER_ID)
+      const fichesUniques = new Set();
+      activitesRecentes.forEach(a => fichesUniques.add(`${a.OWNER_TYPE_ID}-${a.OWNER_ID}`));
       const joursOuvres = 40; // ~60 jours calendaires = ~40 jours ouvrés
-      const fichesParJour = activitesRecentes.length / joursOuvres;
+      const fichesParJour = fichesUniques.size / joursOuvres;
       
       // Score volume (5 pts max) - objectif 15 fiches/jour
       const scoreVolume = Math.min(5, (fichesParJour / 15) * 5);
