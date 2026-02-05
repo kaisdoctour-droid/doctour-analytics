@@ -1228,15 +1228,22 @@ export default function Dashboard() {
     // Calculer les stats par commercial
     const commercialAllocation = {};
     
+    // Commerciaux exclus de l'Allocation (pas de campagnes pub)
+    const excludeFromAllocation = ['Wassim', 'Houda', 'Yosra'];
+    const shouldExcludeFromAllocation = (name) => {
+      if (!name) return true;
+      return excludeFromAllocation.some(excluded => name.toLowerCase().includes(excluded.toLowerCase()));
+    };
+    
     // Identifier les commerciaux actifs (ceux qui ont des leads ou deals récents ET sont dans rawUsers)
     const activeCommercialIds = new Set();
     recentLeads.forEach(l => {
-      if (l.ASSIGNED_BY_ID && activeUserIds.has(l.ASSIGNED_BY_ID) && !shouldExcludeFromStats(getUserName(l.ASSIGNED_BY_ID))) {
+      if (l.ASSIGNED_BY_ID && activeUserIds.has(l.ASSIGNED_BY_ID) && !shouldExcludeFromStats(getUserName(l.ASSIGNED_BY_ID)) && !shouldExcludeFromAllocation(getUserName(l.ASSIGNED_BY_ID))) {
         activeCommercialIds.add(l.ASSIGNED_BY_ID);
       }
     });
     recentDeals.forEach(d => {
-      if (d.ASSIGNED_BY_ID && activeUserIds.has(d.ASSIGNED_BY_ID) && !shouldExcludeFromStats(getUserName(d.ASSIGNED_BY_ID))) {
+      if (d.ASSIGNED_BY_ID && activeUserIds.has(d.ASSIGNED_BY_ID) && !shouldExcludeFromStats(getUserName(d.ASSIGNED_BY_ID)) && !shouldExcludeFromAllocation(getUserName(d.ASSIGNED_BY_ID))) {
         activeCommercialIds.add(d.ASSIGNED_BY_ID);
       }
     });
@@ -1244,6 +1251,7 @@ export default function Dashboard() {
     activeCommercialIds.forEach(commercialId => {
       const name = getUserName(commercialId);
       if (shouldExcludeFromStats(name)) return;
+      if (shouldExcludeFromAllocation(name)) return;
       
       // Leads du commercial (60 derniers jours)
       const leads = recentLeads.filter(l => l.ASSIGNED_BY_ID === commercialId);
