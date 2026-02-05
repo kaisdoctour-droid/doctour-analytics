@@ -2,7 +2,13 @@ import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request) {
+  const { searchParams } = new URL(request.url);
+  // Par défaut : 90 derniers jours (suffisant pour alertes, qualité, allocation, aujourd'hui)
+  // Passer ?all=true pour tout charger
+  const loadAll = searchParams.get('all') === 'true';
+  const days = parseInt(searchParams.get('days') || '90');
+  
   const supabase = createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY
@@ -13,12 +19,22 @@ export async function GET() {
     let from = 0;
     const pageSize = 1000;
     
+    // Date limite
+    const limitDate = new Date();
+    limitDate.setDate(limitDate.getDate() - days);
+    const limitDateStr = limitDate.toISOString();
+    
     while (true) {
-      const { data, error } = await supabase
+      let query = supabase
         .from('activities')
         .select('*')
-        .order('created', { ascending: false })
-        .range(from, from + pageSize - 1);
+        .order('created', { ascending: false });
+      
+      if (!loadAll) {
+        query = query.gte('created', limitDateStr);
+      }
+      
+      const { data, error } = await query.range(from, from + pageSize - 1);
       
       if (error) throw error;
       if (!data || data.length === 0) break;
@@ -27,6 +43,12 @@ export async function GET() {
       from += pageSize;
       
       if (data.length < pageSize) break;
+      
+      // Sécurité en mode all
+      if (loadAll && allActivities.length >= 100000) {
+        console.warn('Activities: limite sécurité 100k atteinte');
+        break;
+      }
     }
 
     const activities = allActivities.map(a => ({
@@ -45,7 +67,13 @@ export async function GET() {
       DIRECTION: a.direction
     }));
 
-    return Response.json({ success: true, data: activities, total: activities.length });
+    return Response.json({ 
+      success: true, 
+      data: activities, 
+      total: activities.length,
+      filtered: !loadAll,
+      days: loadAll ? 'all' : days
+    });
   } catch (error) {
     console.error('Erreur activities:', error);
     return Response.json({ success: false, error: error.message }, { status: 500 });
