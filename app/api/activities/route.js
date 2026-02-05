@@ -1,81 +1,108 @@
 import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const cleanDate = (d) => (d && d !== '' ? d : null);
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  // Par défaut : 90 derniers jours (suffisant pour alertes, qualité, allocation, aujourd'hui)
-  // Passer ?all=true pour tout charger
-  const loadAll = searchParams.get('all') === 'true';
-  const days = parseInt(searchParams.get('days') || '90');
+  const startFrom = parseInt(searchParams.get('start') || '0');
+  // Par défaut: 90 derniers jours uniquement. Pour tout récupérer: ?all=true
+  const fetchAll = searchParams.get('all') === 'true';
+  const onlyPending = searchParams.get('pending') === 'true';
   
-  const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY
-  );
+  const BITRIX_URL = process.env.BITRIX_API_URL;
+  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+
+  // Filtre 90 jours en arrière
+  const ninetyDaysAgo = new Date();
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+  const dateFilter = ninetyDaysAgo.toISOString().split('T')[0];
 
   try {
     const allActivities = [];
-    let from = 0;
-    const pageSize = 1000;
-    
-    // Date limite
-    const limitDate = new Date();
-    limitDate.setDate(limitDate.getDate() - days);
-    const limitDateStr = limitDate.toISOString();
-    
-    while (true) {
-      let query = supabase
-        .from('activities')
-        .select('*')
-        .order('created', { ascending: false });
+    let start = startFrom;
+    let iterations = 0;
+    const maxIterations = 40;
+
+    while (iterations < maxIterations) {
+      let url = `${BITRIX_URL}crm.activity.list?start=${start}`;
+      url += `&select[]=ID&select[]=OWNER_TYPE_ID&select[]=OWNER_ID&select[]=TYPE_ID`;
+      url += `&select[]=SUBJECT&select[]=COMPLETED&select[]=RESPONSIBLE_ID`;
+      url += `&select[]=CREATED&select[]=LAST_UPDATED&select[]=DEADLINE`;
+      url += `&select[]=START_TIME&select[]=END_TIME&select[]=DIRECTION`;
       
-      if (!loadAll) {
-        query = query.gte('created', limitDateStr);
+      // Seulement filtrer sur COMPLETED si onlyPending est true
+      if (onlyPending) url += `&filter[COMPLETED]=N`;
+      url += `&filter[OWNER_TYPE_ID][0]=1&filter[OWNER_TYPE_ID][1]=2`;
+      
+      // OPTIMISATION: 90 derniers jours sauf si ?all=true
+      if (!fetchAll) {
+        url += `&filter[>CREATED]=${dateFilter}`;
       }
       
-      const { data, error } = await query.range(from, from + pageSize - 1);
+      const response = await fetch(url);
       
-      if (error) throw error;
-      if (!data || data.length === 0) break;
+      if (response.status === 429) {
+        await delay(2000);
+        continue;
+      }
       
-      allActivities.push(...data);
-      from += pageSize;
+      const data = await response.json();
       
-      if (data.length < pageSize) break;
+      if (data.error === 'QUERY_LIMIT_EXCEEDED') {
+        await delay(1500);
+        continue;
+      }
       
-      // Sécurité en mode all
-      if (loadAll && allActivities.length >= 100000) {
-        console.warn('Activities: limite sécurité 100k atteinte');
-        break;
+      if (data.result?.length > 0) {
+        allActivities.push(...data.result);
+        start += 50;
+        iterations++;
+        if (data.result.length < 50 || !data.next) break;
+        await delay(400);
+      } else break;
+    }
+
+    if (allActivities.length > 0) {
+      const activities = allActivities.map(a => ({
+        id: a.ID,
+        owner_type_id: a.OWNER_TYPE_ID || null,
+        owner_id: a.OWNER_ID || null,
+        type_id: a.TYPE_ID || null,
+        subject: a.SUBJECT || null,
+        completed: a.COMPLETED === 'Y' ? 'true' : 'false',
+        responsible_id: a.RESPONSIBLE_ID || null,
+        created: cleanDate(a.CREATED),
+        last_updated: cleanDate(a.LAST_UPDATED),
+        deadline: cleanDate(a.DEADLINE),
+        start_time: cleanDate(a.START_TIME),
+        end_time: cleanDate(a.END_TIME),
+        direction: a.DIRECTION || null,
+        updated_at: new Date().toISOString()
+      }));
+      
+      for (let i = 0; i < activities.length; i += 500) {
+        const batch = activities.slice(i, i + 500);
+        await supabase.from('activities').upsert(batch, { onConflict: 'id' });
       }
     }
 
-    const activities = allActivities.map(a => ({
-      ID: a.id,
-      TYPE_ID: a.type_id,
-      SUBJECT: a.subject,
-      OWNER_ID: a.owner_id,
-      OWNER_TYPE_ID: a.owner_type_id,
-      RESPONSIBLE_ID: a.responsible_id,
-      CREATED: a.created,
-      LAST_UPDATED: a.last_updated,
-      DEADLINE: a.deadline,
-      START_TIME: a.start_time,
-      END_TIME: a.end_time,
-      COMPLETED: a.completed,
-      DIRECTION: a.direction
-    }));
+    const hasMore = iterations >= maxIterations;
 
-    return Response.json({ 
-      success: true, 
-      data: activities, 
-      total: activities.length,
-      filtered: !loadAll,
-      days: loadAll ? 'all' : days
+    return Response.json({
+      success: true,
+      count: allActivities.length,
+      totalSynced: startFrom + allActivities.length,
+      hasMore,
+      nextStart: hasMore ? start : null,
+      mode: fetchAll ? 'all_activities' : `last_90_days (since ${dateFilter})`,
+      pendingOnly: onlyPending
     });
+
   } catch (error) {
-    console.error('Erreur activities:', error);
     return Response.json({ success: false, error: error.message }, { status: 500 });
   }
 }
